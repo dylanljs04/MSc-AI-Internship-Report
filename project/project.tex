@@ -51,94 +51,94 @@ This section walks one author, one skill, and one complete evaluation cycle thro
 \begin{enumerate}
   \item The starting point is the skill's page in Maia Knowledge before any evaluation exists. The page already shows the skill's description, its \texttt{SKILL.md}, and its publication state; the evaluation feature occupies its own section of this page, presenting the two dimensions side by side with no results yet recorded (Figure~\ref{fig:ui-before}).
 
-  \begin{figure}[H]
-    \centering
-    \includegraphics[width=0.75\linewidth]{figures/mk-evals-ui-1.png}
-    \caption{The skill page for \texttt{log-digest} before any tests exist. The evaluation section is present but empty; the two dimensions are visible as separate cards.}
-    \label{fig:ui-before}
-  \end{figure}
-
   \item The author begins with invocation tests. The invocation setup page holds two lists of prompts, positive prompts that should trigger the skill and negative prompts that should not. The author is not expected to start from a blank page: a ``Generate test cases'' button drafts candidate prompts from the skill's own description, and the author's task becomes editing and pruning drafts rather than inventing prompts from nothing (Figure~\ref{fig:ui-inv-setup}).
-
-  \begin{figure}[H]
-    \centering
-    \includegraphics[width=0.75\linewidth]{figures/mk-evals-ui-2.png}
-    \caption{The invocation setup page. Positive and negative prompt lists, with generated drafts awaiting the author's edits.}
-    \label{fig:ui-inv-setup}
-  \end{figure}
 
   \item Running the invocation tests replaces the setup view with a live running panel showing per-prompt progress. The two dimensions run independently, so a quality run can proceed while an invocation run is active, but a second run of the same dimension by the same author on the same skill is refused while the first is in flight, and the interface reports the run already active rather than starting a duplicate (Figure~\ref{fig:ui-inv-running}).
 
-  \begin{figure}[H]
-    \centering
-    \includegraphics[width=0.75\linewidth]{figures/mk-evals-ui-3.png}
-    \caption{The running panel during an invocation run, with per-prompt progress and the refusal behaviour for a duplicate run.}
-    \label{fig:ui-inv-running}
-  \end{figure}
-
   \item Invocation results are read as a table of per-prompt rows. Each row shows the prompt, whether the skill actually triggered, whether it was expected to trigger, and the resulting pass or fail. A row that errored, for instance by timing out, is shown as an error and never as a pass (Figure~\ref{fig:ui-inv-results}).
-
-  \begin{figure}[H]
-    \centering
-    \includegraphics[width=0.75\linewidth]{figures/mk-evals-ui-4.png}
-    \caption{Invocation results. Triggered versus expected per prompt, with pass and fail at a glance.}
-    \label{fig:ui-inv-results}
-  \end{figure}
 
   \item Quality tests are authored on their own setup page. Each test is a prompt paired with a natural-language rubric describing what a competent answer must contain; the page also carries the run-model and judge-model selections and the pass threshold. The same generate-then-edit flow applies, with first-draft rubrics produced from the skill's description for the author to tighten (Figure~\ref{fig:ui-q-setup}).
 
-  \begin{figure}[H]
-    \centering
-    \includegraphics[width=0.75\linewidth]{figures/mk-evals-ui-5.png}
-    \caption{The quality setup page. Prompt and rubric per test, model selections, and the pass threshold.}
-    \label{fig:ui-q-setup}
-  \end{figure}
-
   \item Running quality tests uses the same running experience as invocation. The visible difference is duration: an invocation prompt resolves in seconds, while a quality test involves a longer agent run followed by judge calls and takes minutes rather than seconds, which the running panel's progress reporting is designed to make tolerable (Figure~\ref{fig:ui-q-running}).
-
-  \begin{figure}[H]
-    \centering
-    \includegraphics[width=0.75\linewidth]{figures/mk-evals-ui-6.png}
-    \caption{A quality run in progress, in the same running panel as Figure~\ref{fig:ui-inv-running} but over a longer horizon.}
-    \label{fig:ui-q-running}
-  \end{figure}
 
   \item A quality result opens into an expandable card. The card's summary line carries the normalised score and the pass or fail verdict; expanding it reveals the judge's reasoning against the rubric and, beneath that, the step-by-step trace of what the agent did during the run, tool call by tool call. The trace is what lets an author diagnose a failure without re-running anything (Figure~\ref{fig:ui-q-card}).
 
-  \begin{figure}[H]
-    \centering
-    \includegraphics[width=0.75\linewidth]{figures/mk-evals-ui-7.png}
-    \caption{An expanded quality result card: score, judge reasoning, and the run trace.}
-    \label{fig:ui-q-card}
-  \end{figure}
-
   \item Publishing turns the authored tests into a versioned artefact. Saving commits \texttt{eval.yaml} beside \texttt{SKILL.md} on the author's own branch and opens a pull request into the marketplace repository, so tests enter exactly the same review-and-merge lifecycle as the skill itself, the lifecycle illustrated in Chapter~\ref{ch:background}. Results are never committed: run history is data about the skill, not part of it, and it stays in the database. An author comfortable with git can bypass this page entirely, write \texttt{eval.yaml} by hand, and raise the pull request directly; the file format is the same either way (Figure~\ref{fig:ui-publish}).
-
-  \begin{figure}[H]
-    \centering
-    \includegraphics[width=0.75\linewidth]{figures/mk-evals-ui-8.png}
-    \caption{Publishing. The commit lands on the author's branch and a pull request into the marketplace repository is opened.}
-    \label{fig:ui-publish}
-  \end{figure}
 
   \item Back at the skill page, the evaluation section now shows an eval-scores card with pass and fail at a glance for both dimensions. The card is honest about staleness: a result produced from an older version of the skill, or against an \texttt{eval.yaml} that has since been edited, is never presented as current, because the platform filters displayed results to runs whose recorded inputs still match the tests as published (Figure~\ref{fig:ui-after}).
 
-  \begin{figure}[H]
-    \centering
-    \includegraphics[width=0.75\linewidth]{figures/mk-evals-ui-9.png}
-    \caption{The skill page after evaluation. The eval-scores card summarises both dimensions, and only results matching the current tests are shown as current.}
-    \label{fig:ui-after}
-  \end{figure}
-
   \item Following that card through opens the consolidated test-results page, which is the view a reviewer rather than an author reads. It leads with the headline verdict and then expands into what was actually tested: the positive and negative prompts under the invocation dimension, and, under quality, each test's prompt, its normalised score, and the judge's one-line justification. This page is the artefact the review step of the lifecycle in Chapter~\ref{ch:background} previously lacked, namely evidence of behaviour presented alongside the skill a reviewer is being asked to approve (Figure~\ref{fig:ui-results-page}).
-
-  \begin{figure}[H]
-    \centering
-    \includegraphics[width=0.75\linewidth]{figures/mk-evals-ui-10.png}
-    \caption{The consolidated test-results page, summarising both dimensions for a reviewer: the headline verdict, the invocation prompts and their polarity, and the per-test quality scores with the judge's justification.}
-    \label{fig:ui-results-page}
-  \end{figure}
 \end{enumerate}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.75\linewidth]{figures/mk-evals-ui-1.png}
+  \caption{The skill page for \texttt{log-digest} before any tests exist. The evaluation section is present but empty; the two dimensions are visible as separate cards.}
+  \label{fig:ui-before}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.75\linewidth]{figures/mk-evals-ui-2.png}
+  \caption{The invocation setup page. Positive and negative prompt lists, with generated drafts awaiting the author's edits.}
+  \label{fig:ui-inv-setup}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.75\linewidth]{figures/mk-evals-ui-3.png}
+  \caption{The running panel during an invocation run, with per-prompt progress and the refusal behaviour for a duplicate run.}
+  \label{fig:ui-inv-running}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.75\linewidth]{figures/mk-evals-ui-4.png}
+  \caption{Invocation results. Triggered versus expected per prompt, with pass and fail at a glance.}
+  \label{fig:ui-inv-results}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.75\linewidth]{figures/mk-evals-ui-5.png}
+  \caption{The quality setup page. Prompt and rubric per test, model selections, and the pass threshold.}
+  \label{fig:ui-q-setup}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.75\linewidth]{figures/mk-evals-ui-6.png}
+  \caption{A quality run in progress, in the same running panel as Figure~\ref{fig:ui-inv-running} but over a longer horizon.}
+  \label{fig:ui-q-running}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.75\linewidth]{figures/mk-evals-ui-7.png}
+  \caption{An expanded quality result card: score, judge reasoning, and the run trace.}
+  \label{fig:ui-q-card}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.75\linewidth]{figures/mk-evals-ui-8.png}
+  \caption{Publishing. The commit lands on the author's branch and a pull request into the marketplace repository is opened.}
+  \label{fig:ui-publish}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.75\linewidth]{figures/mk-evals-ui-9.png}
+  \caption{The skill page after evaluation. The eval-scores card summarises both dimensions, and only results matching the current tests are shown as current.}
+  \label{fig:ui-after}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.75\linewidth]{figures/mk-evals-ui-10.png}
+  \caption{The consolidated test-results page, summarising both dimensions for a reviewer: the headline verdict, the invocation prompts and their polarity, and the per-test quality scores with the judge's justification.}
+  \label{fig:ui-results-page}
+\end{figure}
 
 \section{The man.evals library and command line}
 
