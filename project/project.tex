@@ -53,19 +53,12 @@ This section walks one author, one skill, and one complete evaluation cycle thro
 
   \begin{figure}[H]
     \centering
-    \includegraphics[width=0.75\linewidth]{figures/mk-evals-ui-1.png}
-    \caption{The skill page for \texttt{log-digest} before any tests exist. The evaluation section is present but empty; the two dimensions are visible as separate cards.}
+    \includegraphics[width=1\linewidth]{figures/mk-evals-ui-1.png}
+    \caption{The skill page for \texttt{log-digest} before any tests exist. The evaluation section is present but empty}
     \label{fig:ui-before}
   \end{figure}
 
   \item The author begins with invocation tests. The invocation setup page holds two lists of prompts, positive prompts that should trigger the skill and negative prompts that should not. The author is not expected to start from a blank page: a ``Generate test cases'' button drafts candidate prompts from the skill's own description, and the author's task becomes editing and pruning drafts rather than inventing prompts from nothing (Figure~\ref{fig:ui-inv-setup}).
-
-  \begin{figure}[H]
-    \centering
-    \includegraphics[width=0.75\linewidth]{figures/mk-evals-ui-2.png}
-    \caption{The invocation setup page. Positive and negative prompt lists, with generated drafts awaiting the author's edits.}
-    \label{fig:ui-inv-setup}
-  \end{figure}
 
   \item Running the invocation tests replaces the setup view with a live running panel showing per-prompt progress. The two dimensions run independently, so a quality run can proceed while an invocation run is active, but a second run of the same dimension by the same author on the same skill is refused while the first is in flight, and the interface reports the run already active rather than starting a duplicate (Figure~\ref{fig:ui-inv-running}).
 
