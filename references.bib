@@ -1,0 +1,579 @@
+% =====================================================================
+% Verified references for Chapter 2 (Background and Related Work)
+% of the man.evals MSc internship report.
+%
+% All entries verified against arXiv / ACL Anthology / OpenReview /
+% NeurIPS proceedings / publisher pages, August 2026.
+%
+% VANCOUVER USAGE:
+%   BibTeX is style-agnostic; Vancouver numbering comes from the style.
+%   - biblatex:  \usepackage[style=vancouver]{biblatex}
+%                \addbibresource{chapter2_references.bib}
+%   - classic:   \bibliographystyle{vancouver}  (with the vancouver.bst
+%                package installed) and \bibliography{chapter2_references}
+%   Cite with \cite{key} as usual; numbering is automatic.
+%
+% NOTE: The draft report's reference [12] attributed JudgeBench to
+% "Wang, P. et al." -- this is INCORRECT. Correct authors are
+% Tan et al. (see @inproceedings{tan2025judgebench} below).
+% =====================================================================
+
+
+% ---------------------------------------------------------------------
+% 1. MAN GROUP, INDUSTRY, AND REGULATORY CONTEXT (Sections 2.1, 2.7)
+% ---------------------------------------------------------------------
+
+@misc{mangroup2026about,
+  author       = {{Man Group plc}},
+  title        = {About {Man} {Group}},
+  year         = {2026},
+  howpublished = {\url{https://www.man.com/about}},
+  note         = {[Internet]. Accessed 30 August 2026}
+}
+
+@misc{mangroup2026anthropic,
+  author       = {{Man Group plc}},
+  title        = {Man {Group} teams up with {Anthropic} to put {AI} at the centre of investing},
+  year         = {2026},
+  howpublished = {\url{https://www.man.com/news-centre/man-group-anthropic-partnership}},
+  note         = {[Internet]. Press release. Accessed 30 August 2026}
+}
+
+@techreport{federalreserve2026sr262,
+  author      = {{Board of Governors of the Federal Reserve System}
+                 and {Office of the Comptroller of the Currency}
+                 and {Federal Deposit Insurance Corporation}},
+  title       = {Revised Guidance on Model Risk Management},
+  institution = {Board of Governors of the Federal Reserve System},
+  number      = {SR Letter 26-2},
+  year        = {2026},
+  month       = apr,
+  url         = {https://www.federalreserve.gov/supervisionreg/srletters/SR2602.htm},
+  note        = {[Internet]. Accessed 30 August 2026}
+}
+
+@techreport{bankofengland2022dp522,
+  author      = {{Bank of England} and {Financial Conduct Authority}},
+  title       = {{DP5/22} -- Artificial Intelligence and Machine Learning},
+  institution = {Bank of England},
+  type        = {Discussion Paper},
+  number      = {5/22},
+  year        = {2022},
+  month       = oct,
+  url         = {https://www.bankofengland.co.uk/prudential-regulation/publication/2022/october/artificial-intelligence},
+  note        = {[Internet]. Published 11 October 2022. Accessed 30 August 2026}
+}
+
+@misc{eu2024aiact,
+  author       = {{European Parliament and Council of the European Union}},
+  title        = {Regulation ({EU}) 2024/1689 of the {European} {Parliament} and of the {Council} of 13 June 2024 laying down harmonised rules on artificial intelligence ({Artificial} {Intelligence} {Act})},
+  year         = {2024},
+  howpublished = {Official Journal of the European Union, L series, 12 July 2024},
+  url          = {https://eur-lex.europa.eu/eli/reg/2024/1689/oj},
+  note         = {[Internet]. Accessed 30 August 2026}
+}
+
+
+% ---------------------------------------------------------------------
+% 2. ANTHROPIC PRODUCT DOCUMENTATION (Section 2.2)
+% ---------------------------------------------------------------------
+
+@misc{anthropic2026claudecode,
+  author       = {{Anthropic}},
+  title        = {Claude {Code} Documentation},
+  year         = {2026},
+  howpublished = {\url{https://code.claude.com/docs/en/}},
+  note         = {[Internet]. Accessed 30 August 2026}
+}
+
+@misc{anthropic2026agentsdk,
+  author       = {{Anthropic}},
+  title        = {Agent {SDK} Overview -- {Claude} {Code} Documentation},
+  year         = {2026},
+  howpublished = {\url{https://code.claude.com/docs/en/agent-sdk/overview}},
+  note         = {[Internet]. Accessed 30 August 2026}
+}
+
+@misc{anthropic2026skills,
+  author       = {{Anthropic}},
+  title        = {Agent {Skills} -- {Claude} Platform Documentation},
+  year         = {2026},
+  howpublished = {\url{https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview}},
+  note         = {[Internet]. Accessed 30 August 2026}
+}
+
+@misc{anthropic2024mcp,
+  author       = {{Anthropic}},
+  title        = {Introducing the {Model} {Context} {Protocol}},
+  year         = {2024},
+  month        = nov,
+  howpublished = {\url{https://www.anthropic.com/news/model-context-protocol}},
+  note         = {[Internet]. Published 25 November 2024. Accessed 30 August 2026}
+}
+
+
+% ---------------------------------------------------------------------
+% 3. AGENT PARADIGM AND CAPABILITY-INJECTION ALTERNATIVES (Sections 2.1, 2.2)
+% ---------------------------------------------------------------------
+
+@inproceedings{yao2023react,
+  author    = {Yao, Shunyu and Zhao, Jeffrey and Yu, Dian and Du, Nan and Shafran, Izhak and Narasimhan, Karthik and Cao, Yuan},
+  title     = {{ReAct}: Synergizing Reasoning and Acting in Language Models},
+  booktitle = {The Eleventh International Conference on Learning Representations (ICLR)},
+  year      = {2023},
+  eprint    = {2210.03629},
+  archiveprefix = {arXiv},
+  url       = {https://arxiv.org/abs/2210.03629}
+}
+
+@inproceedings{schick2023toolformer,
+  author    = {Schick, Timo and Dwivedi-Yu, Jane and Dess{\`i}, Roberto and Raileanu, Roberta and Lomeli, Maria and Hambro, Eric and Zettlemoyer, Luke and Cancedda, Nicola and Scialom, Thomas},
+  title     = {Toolformer: Language Models Can Teach Themselves to Use Tools},
+  booktitle = {Advances in Neural Information Processing Systems 36 (NeurIPS)},
+  year      = {2023},
+  eprint    = {2302.04761},
+  archiveprefix = {arXiv},
+  url       = {https://arxiv.org/abs/2302.04761}
+}
+
+@inproceedings{hu2022lora,
+  author    = {Hu, Edward J. and Shen, Yelong and Wallis, Phillip and Allen-Zhu, Zeyuan and Li, Yuanzhi and Wang, Shean and Wang, Lu and Chen, Weizhu},
+  title     = {{LoRA}: Low-Rank Adaptation of Large Language Models},
+  booktitle = {The Tenth International Conference on Learning Representations (ICLR)},
+  year      = {2022},
+  eprint    = {2106.09685},
+  archiveprefix = {arXiv},
+  url       = {https://arxiv.org/abs/2106.09685}
+}
+
+@inproceedings{lewis2020rag,
+  author    = {Lewis, Patrick and Perez, Ethan and Piktus, Aleksandra and Petroni, Fabio and Karpukhin, Vladimir and Goyal, Naman and K{\"u}ttler, Heinrich and Lewis, Mike and Yih, Wen-tau and Rockt{\"a}schel, Tim and Riedel, Sebastian and Kiela, Douwe},
+  title     = {Retrieval-Augmented Generation for Knowledge-Intensive {NLP} Tasks},
+  booktitle = {Advances in Neural Information Processing Systems 33 (NeurIPS)},
+  pages     = {9459--9474},
+  year      = {2020},
+  eprint    = {2005.11401},
+  archiveprefix = {arXiv},
+  url       = {https://arxiv.org/abs/2005.11401}
+}
+
+
+% ---------------------------------------------------------------------
+% 4. NLG EVALUATION: REFERENCE-BASED AND LEARNED METRICS (Section 2.3)
+% ---------------------------------------------------------------------
+
+@inproceedings{papineni2002bleu,
+  author    = {Papineni, Kishore and Roukos, Salim and Ward, Todd and Zhu, Wei-Jing},
+  title     = {{BLEU}: a Method for Automatic Evaluation of Machine Translation},
+  booktitle = {Proceedings of the 40th Annual Meeting of the Association for Computational Linguistics (ACL)},
+  pages     = {311--318},
+  year      = {2002},
+  doi       = {10.3115/1073083.1073135}
+}
+
+@inproceedings{lin2004rouge,
+  author    = {Lin, Chin-Yew},
+  title     = {{ROUGE}: A Package for Automatic Evaluation of Summaries},
+  booktitle = {Text Summarization Branches Out},
+  publisher = {Association for Computational Linguistics},
+  pages     = {74--81},
+  year      = {2004},
+  url       = {https://aclanthology.org/W04-1013/}
+}
+
+@inproceedings{zhang2020bertscore,
+  author    = {Zhang, Tianyi and Kishore, Varsha and Wu, Felix and Weinberger, Kilian Q. and Artzi, Yoav},
+  title     = {{BERTScore}: Evaluating Text Generation with {BERT}},
+  booktitle = {The Eighth International Conference on Learning Representations (ICLR)},
+  year      = {2020},
+  eprint    = {1904.09675},
+  archiveprefix = {arXiv},
+  url       = {https://arxiv.org/abs/1904.09675}
+}
+
+@inproceedings{sellam2020bleurt,
+  author    = {Sellam, Thibault and Das, Dipanjan and Parikh, Ankur P.},
+  title     = {{BLEURT}: Learning Robust Metrics for Text Generation},
+  booktitle = {Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics (ACL)},
+  pages     = {7881--7892},
+  year      = {2020},
+  doi       = {10.18653/v1/2020.acl-main.704}
+}
+
+@inproceedings{rei2020comet,
+  author    = {Rei, Ricardo and Stewart, Craig and Farinha, Ana C. and Lavie, Alon},
+  title     = {{COMET}: A Neural Framework for {MT} Evaluation},
+  booktitle = {Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP)},
+  pages     = {2685--2702},
+  year      = {2020},
+  doi       = {10.18653/v1/2020.emnlp-main.213}
+}
+
+@inproceedings{novikova2017why,
+  author    = {Novikova, Jekaterina and Du{\v{s}}ek, Ond{\v{r}}ej and Curry, Amanda Cercas and Rieser, Verena},
+  title     = {Why We Need New Evaluation Metrics for {NLG}},
+  booktitle = {Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing (EMNLP)},
+  pages     = {2241--2252},
+  year      = {2017},
+  doi       = {10.18653/v1/D17-1238}
+}
+
+
+% ---------------------------------------------------------------------
+% 5. LLM-AS-JUDGE: METHODS (Section 2.3)
+% ---------------------------------------------------------------------
+
+@inproceedings{liu2023geval,
+  author    = {Liu, Yang and Iter, Dan and Xu, Yichong and Wang, Shuohang and Xu, Ruochen and Zhu, Chenguang},
+  title     = {{G-Eval}: {NLG} Evaluation using {GPT-4} with Better Human Alignment},
+  booktitle = {Proceedings of the 2023 Conference on Empirical Methods in Natural Language Processing (EMNLP)},
+  pages     = {2511--2522},
+  year      = {2023},
+  doi       = {10.18653/v1/2023.emnlp-main.153},
+  eprint    = {2303.16634},
+  archiveprefix = {arXiv}
+}
+
+@inproceedings{zheng2023mtbench,
+  author    = {Zheng, Lianmin and Chiang, Wei-Lin and Sheng, Ying and Zhuang, Siyuan and Wu, Zhanghao and Zhuang, Yonghao and Lin, Zi and Li, Zhuohan and Li, Dacheng and Xing, Eric P. and Zhang, Hao and Gonzalez, Joseph E. and Stoica, Ion},
+  title     = {Judging {LLM-as-a-Judge} with {MT-Bench} and {Chatbot} {Arena}},
+  booktitle = {Advances in Neural Information Processing Systems 36 (NeurIPS), Datasets and Benchmarks Track},
+  year      = {2023},
+  eprint    = {2306.05685},
+  archiveprefix = {arXiv},
+  url       = {https://arxiv.org/abs/2306.05685}
+}
+
+@inproceedings{chiang2023llmalternative,
+  author    = {Chiang, Cheng-Han and Lee, Hung-yi},
+  title     = {Can Large Language Models Be an Alternative to Human Evaluations?},
+  booktitle = {Proceedings of the 61st Annual Meeting of the Association for Computational Linguistics (ACL)},
+  pages     = {15607--15631},
+  year      = {2023},
+  doi       = {10.18653/v1/2023.acl-long.870}
+}
+
+@misc{li2023alpacaeval,
+  author       = {Li, Xuechen and Zhang, Tianyi and Dubois, Yann and Taori, Rohan and Gulrajani, Ishaan and Guestrin, Carlos and Liang, Percy and Hashimoto, Tatsunori B.},
+  title        = {{AlpacaEval}: An Automatic Evaluator of Instruction-following Models},
+  year         = {2023},
+  howpublished = {\url{https://github.com/tatsu-lab/alpaca_eval}},
+  note         = {[Internet]. GitHub repository. Accessed 30 August 2026}
+}
+
+@misc{dubois2024lengthcontrolled,
+  author       = {Dubois, Yann and Galambosi, Bal{\'a}zs and Liang, Percy and Hashimoto, Tatsunori B.},
+  title        = {Length-Controlled {AlpacaEval}: A Simple Way to Debias Automatic Evaluators},
+  year         = {2024},
+  eprint       = {2404.04475},
+  archiveprefix = {arXiv},
+  primaryclass = {cs.LG},
+  doi          = {10.48550/arXiv.2404.04475},
+  url          = {https://arxiv.org/abs/2404.04475}
+}
+
+@inproceedings{kim2024prometheus,
+  author    = {Kim, Seungone and Shin, Jamin and Cho, Yejin and Jang, Joel and Longpre, Shayne and Lee, Hwaran and Yun, Sangdoo and Shin, Seongjin and Kim, Sungdong and Thorne, James and Seo, Minjoon},
+  title     = {Prometheus: Inducing Fine-Grained Evaluation Capability in Language Models},
+  booktitle = {The Twelfth International Conference on Learning Representations (ICLR)},
+  year      = {2024},
+  eprint    = {2310.08491},
+  archiveprefix = {arXiv},
+  url       = {https://arxiv.org/abs/2310.08491}
+}
+
+@inproceedings{kim2024prometheus2,
+  author    = {Kim, Seungone and Suk, Juyoung and Longpre, Shayne and Lin, Bill Yuchen and Shin, Jamin and Welleck, Sean and Neubig, Graham and Lee, Moontae and Lee, Kyungjae and Seo, Minjoon},
+  title     = {Prometheus 2: An Open Source Language Model Specialized in Evaluating Other Language Models},
+  booktitle = {Proceedings of the 2024 Conference on Empirical Methods in Natural Language Processing (EMNLP)},
+  pages     = {4334--4353},
+  year      = {2024},
+  doi       = {10.18653/v1/2024.emnlp-main.248},
+  eprint    = {2405.01535},
+  archiveprefix = {arXiv}
+}
+
+@misc{verga2024juries,
+  author       = {Verga, Pat and Hofst{\"a}tter, Sebastian and Althammer, Sophia and Su, Yixuan and Piktus, Aleksandra and Arkhangorodsky, Arkady and Xu, Minjie and White, Naomi and Lewis, Patrick},
+  title        = {Replacing Judges with Juries: Evaluating {LLM} Generations with a Panel of Diverse Models},
+  year         = {2024},
+  eprint       = {2404.18796},
+  archiveprefix = {arXiv},
+  primaryclass = {cs.CL},
+  doi          = {10.48550/arXiv.2404.18796},
+  url          = {https://arxiv.org/abs/2404.18796}
+}
+
+
+% ---------------------------------------------------------------------
+% 6. LLM-AS-JUDGE: BIASES, FAILURE MODES, AND TRUST (Section 2.3)
+% ---------------------------------------------------------------------
+
+@inproceedings{wang2024notfair,
+  author    = {Wang, Peiyi and Li, Lei and Chen, Liang and Cai, Zefan and Zhu, Dawei and Lin, Binghuai and Cao, Yunbo and Kong, Lingpeng and Liu, Qi and Liu, Tianyu and Sui, Zhifang},
+  title     = {Large Language Models are not Fair Evaluators},
+  booktitle = {Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (ACL)},
+  pages     = {9440--9450},
+  year      = {2024},
+  doi       = {10.18653/v1/2024.acl-long.511},
+  eprint    = {2305.17926},
+  archiveprefix = {arXiv}
+}
+
+@inproceedings{panickssery2024selfpreference,
+  author    = {Panickssery, Arjun and Bowman, Samuel R. and Feng, Shi},
+  title     = {{LLM} Evaluators Recognize and Favor Their Own Generations},
+  booktitle = {Advances in Neural Information Processing Systems 37 (NeurIPS)},
+  year      = {2024},
+  eprint    = {2404.13076},
+  archiveprefix = {arXiv},
+  url       = {https://proceedings.neurips.cc/paper_files/paper/2024/hash/7f1f0218e45f5414c79c0679633e47bc-Abstract-Conference.html}
+}
+
+@inproceedings{tan2025judgebench,
+  author    = {Tan, Sijun and Zhuang, Siyuan and Montgomery, Kyle and Tang, William Y. and Cuadron, Alejandro and Wang, Chenguang and Popa, Raluca Ada and Stoica, Ion},
+  title     = {{JudgeBench}: A Benchmark for Evaluating {LLM}-based Judges},
+  booktitle = {The Thirteenth International Conference on Learning Representations (ICLR)},
+  year      = {2025},
+  eprint    = {2410.12784},
+  archiveprefix = {arXiv},
+  url       = {https://arxiv.org/abs/2410.12784}
+}
+
+@inproceedings{gao2023rewardoveroptimization,
+  author    = {Gao, Leo and Schulman, John and Hilton, Jacob},
+  title     = {Scaling Laws for Reward Model Overoptimization},
+  booktitle = {Proceedings of the 40th International Conference on Machine Learning (ICML), PMLR 202},
+  year      = {2023},
+  eprint    = {2210.10760},
+  archiveprefix = {arXiv},
+  url       = {https://arxiv.org/abs/2210.10760}
+}
+
+@inproceedings{shankar2024validators,
+  author    = {Shankar, Shreya and Zamfirescu-Pereira, J. D. and Hartmann, Bj{\"o}rn and Parameswaran, Aditya G. and Arawjo, Ian},
+  title     = {Who Validates the Validators? {Aligning} {LLM}-Assisted Evaluation of {LLM} Outputs with Human Preferences},
+  booktitle = {Proceedings of the 37th Annual ACM Symposium on User Interface Software and Technology (UIST)},
+  pages     = {1--14},
+  year      = {2024},
+  doi       = {10.1145/3654777.3676450},
+  eprint    = {2404.12272},
+  archiveprefix = {arXiv}
+}
+
+
+% ---------------------------------------------------------------------
+% 7. AGENT BENCHMARKS AND AGENT EVALUATION (Section 2.4)
+% ---------------------------------------------------------------------
+
+@inproceedings{jimenez2024swebench,
+  author    = {Jimenez, Carlos E. and Yang, John and Wettig, Alexander and Yao, Shunyu and Pei, Kexin and Press, Ofir and Narasimhan, Karthik},
+  title     = {{SWE-bench}: Can Language Models Resolve Real-World {GitHub} Issues?},
+  booktitle = {The Twelfth International Conference on Learning Representations (ICLR)},
+  year      = {2024},
+  eprint    = {2310.06770},
+  archiveprefix = {arXiv},
+  url       = {https://arxiv.org/abs/2310.06770}
+}
+
+@inproceedings{zhou2024webarena,
+  author    = {Zhou, Shuyan and Xu, Frank F. and Zhu, Hao and Zhou, Xuhui and Lo, Robert and Sridhar, Abishek and Cheng, Xianyi and Ou, Tianyue and Bisk, Yonatan and Fried, Daniel and Alon, Uri and Neubig, Graham},
+  title     = {{WebArena}: A Realistic Web Environment for Building Autonomous Agents},
+  booktitle = {The Twelfth International Conference on Learning Representations (ICLR)},
+  year      = {2024},
+  eprint    = {2307.13854},
+  archiveprefix = {arXiv},
+  url       = {https://arxiv.org/abs/2307.13854}
+}
+
+@inproceedings{mialon2024gaia,
+  author    = {Mialon, Gr{\'e}goire and Fourrier, Cl{\'e}mentine and Wolf, Thomas and LeCun, Yann and Scialom, Thomas},
+  title     = {{GAIA}: A Benchmark for General {AI} Assistants},
+  booktitle = {The Twelfth International Conference on Learning Representations (ICLR)},
+  year      = {2024},
+  eprint    = {2311.12983},
+  archiveprefix = {arXiv},
+  url       = {https://openreview.net/forum?id=fibxvahvs3}
+}
+
+@inproceedings{qin2024toolllm,
+  author    = {Qin, Yujia and Liang, Shihao and Ye, Yining and Zhu, Kunlun and Yan, Lan and Lu, Yaxi and Lin, Yankai and Cong, Xin and Tang, Xiangru and Qian, Bill and Zhao, Sihan and Hong, Lauren and Tian, Runchu and Xie, Ruobing and Zhou, Jie and Gerstein, Mark and Li, Dahai and Liu, Zhiyuan and Sun, Maosong},
+  title     = {{ToolLLM}: Facilitating Large Language Models to Master 16000+ Real-World {APIs}},
+  booktitle = {The Twelfth International Conference on Learning Representations (ICLR)},
+  year      = {2024},
+  eprint    = {2307.16789},
+  archiveprefix = {arXiv},
+  url       = {https://arxiv.org/abs/2307.16789}
+}
+
+@inproceedings{liu2024agentbench,
+  author    = {Liu, Xiao and Yu, Hao and Zhang, Hanchen and Xu, Yifan and Lei, Xuanyu and Lai, Hanyu and Gu, Yu and Ding, Hangliang and Men, Kaiwen and Yang, Kejuan and Zhang, Shudan and Deng, Xiang and Zeng, Aohan and Du, Zhengxiao and Zhang, Chenhui and Shen, Sheng and Zhang, Tianjun and Su, Yu and Sun, Huan and Huang, Minlie and Dong, Yuxiao and Tang, Jie},
+  title     = {{AgentBench}: Evaluating {LLMs} as Agents},
+  booktitle = {The Twelfth International Conference on Learning Representations (ICLR)},
+  year      = {2024},
+  eprint    = {2308.03688},
+  archiveprefix = {arXiv},
+  url       = {https://arxiv.org/abs/2308.03688}
+}
+
+@inproceedings{xie2024osworld,
+  author    = {Xie, Tianbao and Zhang, Danyang and Chen, Jixuan and Li, Xiaochuan and Zhao, Siheng and Cao, Ruisheng and Toh, Jing Hua and Cheng, Zhoujun and Shin, Dongchan and Lei, Fangyu and Liu, Yitao and Xu, Yiheng and Zhou, Shuyan and Savarese, Silvio and Xiong, Caiming and Zhong, Victor and Yu, Tao},
+  title     = {{OSWorld}: Benchmarking Multimodal Agents for Open-Ended Tasks in Real Computer Environments},
+  booktitle = {Advances in Neural Information Processing Systems 37 (NeurIPS), Datasets and Benchmarks Track},
+  year      = {2024},
+  eprint    = {2404.07972},
+  archiveprefix = {arXiv},
+  url       = {https://proceedings.neurips.cc/paper_files/paper/2024/hash/5d413e48f84dc61244b6be550f1cd8f5-Abstract-Datasets_and_Benchmarks_Track.html}
+}
+
+@misc{yao2024taubench,
+  author       = {Yao, Shunyu and Shinn, Noah and Razavi, Pedram and Narasimhan, Karthik},
+  title        = {$\tau$-bench: A Benchmark for Tool-Agent-User Interaction in Real-World Domains},
+  year         = {2024},
+  eprint       = {2406.12045},
+  archiveprefix = {arXiv},
+  primaryclass = {cs.AI},
+  doi          = {10.48550/arXiv.2406.12045},
+  url          = {https://arxiv.org/abs/2406.12045}
+}
+
+@misc{zhuge2024agentasajudge,
+  author       = {Zhuge, Mingchen and Zhao, Changsheng and Ashley, Dylan R. and Wang, Wenyi and Khizbullin, Dmitrii and Xiong, Yunyang and Liu, Zechun and Chang, Ernie and Krishnamoorthi, Raghuraman and Tian, Yuandong and Shi, Yangyang and Chandra, Vikas and Schmidhuber, J{\"u}rgen},
+  title        = {Agent-as-a-Judge: Evaluate Agents with Agents},
+  year         = {2024},
+  eprint       = {2410.10934},
+  archiveprefix = {arXiv},
+  primaryclass = {cs.AI},
+  doi          = {10.48550/arXiv.2410.10934},
+  url          = {https://arxiv.org/abs/2410.10934}
+}
+
+@article{kapoor2025agentsmatter,
+  author  = {Kapoor, Sayash and Stroebl, Benedikt and Siegel, Zachary S. and Nadgir, Nitya and Narayanan, Arvind},
+  title   = {{AI} Agents That Matter},
+  journal = {Transactions on Machine Learning Research},
+  year    = {2025},
+  eprint  = {2407.01502},
+  archiveprefix = {arXiv},
+  url     = {https://arxiv.org/abs/2407.01502}
+}
+
+
+% ---------------------------------------------------------------------
+% 8. PRACTITIONER EVALUATION TOOLING (Section 2.5)
+% ---------------------------------------------------------------------
+
+@misc{aisi2024inspect,
+  author       = {{AI Security Institute, UK}},
+  title        = {Inspect {AI}: Framework for Large Language Model Evaluations},
+  year         = {2024},
+  month        = may,
+  howpublished = {\url{https://github.com/UKGovernmentBEIS/inspect_ai}},
+  note         = {[Internet]. Software. Documentation at https://inspect.aisi.org.uk/. Accessed 30 August 2026}
+}
+
+@misc{openai2023evals,
+  author       = {{OpenAI}},
+  title        = {{OpenAI} {Evals}: A Framework for Evaluating {LLMs} and {LLM} Systems},
+  year         = {2023},
+  howpublished = {\url{https://github.com/openai/evals}},
+  note         = {[Internet]. GitHub repository. Accessed 30 August 2026}
+}
+
+@misc{confidentai2024deepeval,
+  author       = {{Confident AI}},
+  title        = {{DeepEval}: The {LLM} Evaluation Framework},
+  year         = {2024},
+  howpublished = {\url{https://github.com/confident-ai/deepeval}},
+  note         = {[Internet]. GitHub repository. Accessed 30 August 2026}
+}
+
+@misc{promptfoo2024,
+  author       = {{promptfoo}},
+  title        = {promptfoo: Test-Driven {LLM} Development},
+  year         = {2024},
+  howpublished = {\url{https://github.com/promptfoo/promptfoo}},
+  note         = {[Internet]. GitHub repository. Accessed 30 August 2026}
+}
+
+@misc{langchain2024langsmith,
+  author       = {{LangChain}},
+  title        = {{LangSmith} Documentation},
+  year         = {2024},
+  howpublished = {\url{https://docs.smith.langchain.com}},
+  note         = {[Internet]. Accessed 30 August 2026}
+}
+
+
+% ---------------------------------------------------------------------
+% 9. SOFTWARE TESTING AND ML SYSTEMS TESTING (Section 2.6)
+% ---------------------------------------------------------------------
+
+@article{barr2015oracle,
+  author  = {Barr, Earl T. and Harman, Mark and McMinn, Phil and Shahbaz, Muzammil and Yoo, Shin},
+  title   = {The Oracle Problem in Software Testing: A Survey},
+  journal = {IEEE Transactions on Software Engineering},
+  volume  = {41},
+  number  = {5},
+  pages   = {507--525},
+  year    = {2015},
+  doi     = {10.1109/TSE.2014.2372785}
+}
+
+@inproceedings{luo2014flaky,
+  author    = {Luo, Qingzhou and Hariri, Farah and Eloussi, Lamyaa and Marinov, Darko},
+  title     = {An Empirical Analysis of Flaky Tests},
+  booktitle = {Proceedings of the 22nd ACM SIGSOFT International Symposium on Foundations of Software Engineering (FSE)},
+  pages     = {643--653},
+  year      = {2014},
+  doi       = {10.1145/2635868.2635920}
+}
+
+@article{segura2016metamorphic,
+  author  = {Segura, Sergio and Fraser, Gordon and Sanchez, Ana B. and Ruiz-Cort{\'e}s, Antonio},
+  title   = {A Survey on Metamorphic Testing},
+  journal = {IEEE Transactions on Software Engineering},
+  volume  = {42},
+  number  = {9},
+  pages   = {805--824},
+  year    = {2016},
+  doi     = {10.1109/TSE.2016.2532875}
+}
+
+@article{chen2018metamorphic,
+  author  = {Chen, Tsong Yueh and Kuo, Fei-Ching and Liu, Huai and Poon, Pak-Lok and Towey, Dave and Tse, T. H. and Zhou, Zhi Quan},
+  title   = {Metamorphic Testing: A Review of Challenges and Opportunities},
+  journal = {ACM Computing Surveys},
+  volume  = {51},
+  number  = {1},
+  pages   = {4:1--4:27},
+  year    = {2018},
+  doi     = {10.1145/3143561}
+}
+
+@inproceedings{breck2017mltestscore,
+  author    = {Breck, Eric and Cai, Shanqing and Nielsen, Eric and Salib, Michael and Sculley, D.},
+  title     = {The {ML} Test Score: A Rubric for {ML} Production Readiness and Technical Debt Reduction},
+  booktitle = {Proceedings of the 2017 IEEE International Conference on Big Data},
+  pages     = {1123--1132},
+  year      = {2017},
+  doi       = {10.1109/BigData.2017.8258038}
+}
+
+@inproceedings{sculley2015hiddendebt,
+  author    = {Sculley, D. and Holt, Gary and Golovin, Daniel and Davydov, Eugene and Phillips, Todd and Ebner, Dietmar and Chaudhary, Vinay and Young, Michael and Crespo, Jean-Fran{\c{c}}ois and Dennison, Dan},
+  title     = {Hidden Technical Debt in Machine Learning Systems},
+  booktitle = {Advances in Neural Information Processing Systems 28 (NeurIPS)},
+  pages     = {2503--2511},
+  year      = {2015},
+  url       = {https://papers.nips.cc/paper/5656-hidden-technical-debt-in-machine-learning-systems}
+}
+
+@inproceedings{ribeiro2020checklist,
+  author    = {Ribeiro, Marco Tulio and Wu, Tongshuang and Guestrin, Carlos and Singh, Sameer},
+  title     = {Beyond Accuracy: Behavioral Testing of {NLP} Models with {CheckList}},
+  booktitle = {Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics (ACL)},
+  pages     = {4902--4912},
+  year      = {2020},
+  doi       = {10.18653/v1/2020.acl-main.442}
+}

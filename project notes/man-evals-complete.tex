@@ -1,0 +1,402 @@
+# `man.evals` — Complete Technical Reference
+
+This is a from-first-principles, implementation-level reference for `man.evals` (the `maia-evals` repository), written to stand on its own as a study document after the internship ends.
+It goes beyond "what it does" into "exactly how, and why it was built that way," citing the actual module, function, and constant names so the doc stays checkable against the code.
+A companion document, `maia-evals-integration-in-maia-knowledge.md`, covers how this engine fits into the larger Maia Knowledge / Skill Manager product.
+
+## 1. What problem this solves, restated precisely
+
+A Claude Code **skill** is a directory containing `SKILL.md` (YAML front-matter plus Markdown instructions) that teaches an agent *when* to activate and *what to do*.
+Because a skill is prose, not compiled code, there is no compiler and no type system to catch a bad edit — a single reworded sentence can silently change what the agent does.
+`man.evals` is the automated test framework for that prose. It answers two independent questions, defined per-skill in a version-controlled `eval.yaml`:
+
+1. **Invocation** — does the skill activate for the prompts it should, and stay silent for the prompts it should not?
+2. **Quality** — once active, does the agent's answer actually satisfy a rubric, as judged by a second LLM?
+
+A third mode, **tool-enabled quality**, answers the second question for real, by letting the agent actually execute the skill instead of only describing what it would do.
+
+## 2. Repository map
+
+```
+man/evals/
+  __init__.py           public API surface (10 names — see §11)
+  run.py                 run_eval / arun_eval — the top-level orchestrator (301 lines)
+  config.py              eval.yaml schema (pydantic) + parse/serialize (147 lines)
+  constants.py           every tunable constant + model allow-lists (139 lines)
+  sandbox.py             disposable per-run / per-test sandbox construction (178 lines)
+  guard.py               the PreToolUse hook that denies reads of eval.yaml (130 lines)
+  _harness.py            shared concurrency + CLI-result interpretation (293 lines)
+  invocation.py          the invocation dimension (199 lines)
+  quality_readonly.py    the quality dimension, read-only mode (289 lines)
+  quality_tool_use.py    the quality dimension, tool-enabled mode (427 lines)
+  quality_prompts.py     every prompt string both quality modes use (295 lines)
+  judge.py               the man.ai gateway client + the two-stage G-Eval judge (202 lines)
+  transcript.py          turns a drained SDK message stream into a judge-ready trace (341 lines)
+  report.py              payload models, EvalReport, ProgressEvent (301 lines)
+  render.py              pure-function terminal rendering of a finished report (626 lines)
+  console.py             live `rich` progress bars while a run is in flight (289 lines)
+  cli.py                 the `man-evals` argparse CLI (153 lines)
+  _deps.py               routes the bundled CLI's stderr into logging (20 lines)
+
+tests/            5,504 lines across 16 files — fully offline (see §14)
+examples/         5 runnable scripts, one per API surface, + demo-skills/
+docs/             api-reference.md, how-to-use-man-evals.md
+```
+
+`man` is a namespace package — this is the only code under it in this repo (`man/evals/`), so it can sit alongside `man.ai` (a separate package under the same namespace) without conflict.
+The engine is **4,372 lines** of source against **5,504 lines** of tests — the test suite is larger than the code it tests, which is a deliberate choice given how much of this system's correctness lives in edge cases (timeouts, partial streams, malformed judge replies) that are cheap to get wrong silently.
+
+## 3. The `eval.yaml` schema, exactly
+
+Defined in `config.py` with pydantic, using a lenient base class (`_Lenient`, `extra="ignore"`) so a hand-added or future field never breaks a run — this is a deliberate compatibility strategy, not an oversight.
+
+```yaml
+invocation:
+  model: claude-sonnet-5[1m]      # optional; caller override still wins
+  positive: ["deploy the service to prod"]
+  negative: ["what's the weather today"]
+
+quality:
+  model: claude-sonnet-5[1m]
+  judge_model: claude-opus-4-8
+  pass_threshold: 0.7             # optional, default 0.7
+  rewrite_rubric: true            # optional, default true
+  tests:
+    - prompt: "deploy the service to prod"
+      rubric: "Names the exact deploy command and the approval step before it."
+```
+
+Both top-level blocks (`invocation`, `quality`) are optional — a skill can define either, both, or (before it has evals at all) neither.
+
+### Model resolution — the precedence chain
+
+Every model and knob resolves through the same rule, implemented as a method on the block that owns it:
+
+| Knob | Method | Precedence | On missing/invalid |
+|---|---|---|---|
+| `invocation.model` | `EvalInvocation.resolve_model(override)` | caller kwarg > `eval.yaml` > **error** | `ValueError` — there is no built-in default run model |
+| `quality.model` / `quality.judge_model` | `EvalQuality.resolve_models(override_model, override_judge_model)` | same, resolved **independently** per field | `ValueError` per field |
+| `quality.pass_threshold` | `EvalQuality.resolve_threshold(override)` | caller > `eval.yaml` > `DEFAULT_QUALITY_PASS_THRESHOLD` (0.7) | override outside `[0.0, 1.0]` raises; a bad `eval.yaml` value silently falls through to the default (parsing is lenient) |
+| `quality.rewrite_rubric` | `EvalQuality.resolve_rewrite_rubric(override)` | caller > `eval.yaml` > `DEFAULT_QUALITY_REWRITE_RUBRIC` (`True`) | checked with `is not None`, not truthiness — `False` must be distinguishable from "unset" at every level |
+
+Two design choices worth internalizing:
+
+- **Models have no defaults, deliberately.** Every other knob falls back to a sensible default; models do not, because "the engine silently picked a model for you" is exactly the kind of behavior-drift a testing framework must not have. Both `run_model` and `judge_model` are checked against a **hand-maintained allow-list** (`VALID_RUN_MODELS`, `VALID_JUDGE_MODELS` in `constants.py`) *before any sandbox or subprocess exists* — a typo in a model name costs nothing, not even a temp directory.
+- **Two separate model universes.** The *run model* (the agent under test) only ever goes through `claude_agent_sdk` → the internal Anthropic proxy, so it is Claude-only. The *judge model* goes through the `man.ai.mangpt` gateway, which is multi-provider (`VALID_JUDGE_MODELS` is *derived* from `man.ai.mangpt.types.CHAT_MODELS`, specifically so it can never drift out of sync with the gateway's real model list). Judge model ids must **not** carry the `[1m]` (1-million-context) suffix — that is an Anthropic-proxy-only beta name; the man.ai gateway 422s on it.
+
+`parse_eval_yaml(text)` raises a single exception type, `ValueError`, for both malformed YAML and schema violations, so every caller (server, CLI) has exactly one thing to catch and map to a legible error (a 422 for the server, a printed message for the CLI). `serialize_eval_config(cfg)` is the inverse, dumping only the fields that are actually set (`exclude_none=True`).
+
+## 4. Every tunable constant, and why it has the value it does
+
+All of this lives in `constants.py`, which imports nothing else from the package (so every other module can import from it without risk of a cycle).
+
+| Constant | Value | Why |
+|---|---|---|
+| `DEFAULT_QUALITY_PASS_THRESHOLD` | `0.7` | The judge's 1–10 score is normalized to `[0,1]`; this is the cutoff. |
+| `DEFAULT_QUALITY_REWRITE_RUBRIC` | `True` | Rewrite the rubric into concrete steps before judging, by default. |
+| `PROMPT_CONCURRENCY_DEFAULT` | `10` | Concurrent `claude_agent_sdk` subprocesses *per run*; a server embedding this adds its own pod-wide cap on top. |
+| `INVOCATION_MAX_TURNS` | `3` | Deliberately **not** `1` — a skill that inspects a reference file before invoking the `Skill` tool would otherwise be falsely read as "did not trigger." |
+| `INVOCATION_PER_PROMPT_TIMEOUT_S` / `_WHOLE_RUN_TIMEOUT_S` | `60` / `600` | Per-prompt and whole-run ceilings for the invocation dimension. |
+| `QUALITY_READONLY_RUN_MAX_TURNS` | `15` | Headroom for multi-step *reasoning* (no tools to loop on, so turns are cheap here). |
+| `QUALITY_READONLY_PER_PROMPT_TIMEOUT_S` / `_WHOLE_RUN_TIMEOUT_S` | `360` / `3600` | Per-prompt and whole-run ceilings for read-only quality. |
+| `JUDGE_SCORE_MIN` / `_MAX` | `1` / `10` | The judge's raw integer scale before normalization. |
+| `JUDGE_SCORE_ATTEMPTS` | `2` | Deliberately low — a retry fixes a transient formatting slip, not a systematic scale mismatch; more retries would just mask a broken judge prompt. |
+| `TURN_CAP_SUBTYPE` / `BUDGET_CAP_SUBTYPE` | `"error_max_turns"` / `"error_max_budget_usd"` | The CLI's own structured result subtypes for "stopped on a limit" — **never** matched by message text, because message wording is not a stable contract. |
+| `EVAL_READONLY_TOOLS` | `["Read", "Grep", "Glob", "Skill"]` | The entire tool surface for both read-only dimensions. No Bash, no network, no write/exec. |
+| `EVAL_READONLY_PERMISSION_MODE` | `"default"` | The permission mode string actually passed to the agent SDK for read-only runs — one definition shared by the options builder, the trace policy, and the payload default, so they cannot drift apart. |
+| `EVAL_TOOL_USE_TOOLS` | `{"type": "preset", "preset": "claude_code"}` | The **full** Claude Code tool preset, including `Task` (subagents). |
+| `TOOL_EVAL_PERMISSION_MODE` | `"auto"` | Every non-allowlisted tool call is reviewed by an LLM safety classifier before it runs. |
+| `TOOL_USE_MAX_BUDGET_USD` | `10.0` | The *real* bound on a tool-enabled run is dollars, not turns — a turn cap would truncate legitimate multi-step agent work. |
+| `QUALITY_TOOL_USE_RUN_MAX_TURNS` | `100` | A runaway-loop backstop only, far above any legitimate run — hitting it is a normal stop, never an errored row. |
+| `QUALITY_TOOL_USE_PER_PROMPT_TIMEOUT_S` / `_WHOLE_RUN_TIMEOUT_S` | `900` / `5400` | Real command execution needs far more time than reasoning-only runs. |
+| `REPORT_BANNER_WIDTH` | `80` | Fixed, not terminal-width-based — `summary()` must render byte-identically everywhere, including in CI logs. |
+| `RESERVED_EVAL_FILES` | `{"eval.yaml", "eval.yml"}` | Excluded from every sandbox copy, at any depth. |
+
+`ENGINE_VERSION` is read from installed package metadata (`importlib.metadata.version("man.evals")`, falling back to `"0.0.0.dev0"` when unpackaged) and is stamped onto **every** result payload, so a server persisting results across engine upgrades can always tell which version produced a given row.
+
+## 5. Dimension 1 — Invocation (`invocation.py`)
+
+**Question answered:** does the `Skill` tool actually fire, for the right prompts, and stay silent for the wrong ones?
+
+**Mechanism (`_did_invoke_skill`):** send one short query per prompt with `readonly_agent_options(sandbox, model, INVOCATION_MAX_TURNS)`. Drain the whole stream (never return early on the first match) and watch every `AssistantMessage` for a `ToolUseBlock` named `"Skill"` whose `input["skill"]` equals the sandboxed skill's name. `tolerate=hit_turn_cap` means a turn-cap stop does **not** error the row — the test just observed whatever happened within its turn budget, which is a legitimate (if inconclusive) result, not a failure. A *budget*-cap stop, by contrast, still raises — this dimension sets no dollar budget, so hitting one would be a genuine anomaly.
+
+**Grading rule:** `passed = (error_msg is None) and (triggered == should_trigger)`. An errored row (timeout, runner exception) **never** passes — a timeout on a negative test must never be read as a correct "did not trigger."
+
+**Test-entry normalization (`with_positional_ids`, in `_harness.py`):** plain strings get positional ids (`pos-01`, `neg-02`, ...); dict entries keep a caller-supplied id if present. This lets the same function accept either the bare-string form authors write in `eval.yaml` or the `{id, prompt}` form the Skill Manager frontend sends.
+
+**Sandbox lifetime:** one sandbox for the *whole* invocation run (not per test) — read-only tests cannot interfere with each other, so there is no correctness reason to pay for N separate copies.
+
+**Supporting skills:** if the primary skill's `SKILL.md` invokes another skill, that dependency is materialized as a sibling in the same sandbox via `supporting_skills`, but a row only passes on the *primary* skill firing — `_did_invoke_skill` checks the sandboxed skill's own name, so a supporting skill is present for context, never graded.
+
+## 6. Dimension 2 — Quality, read-only mode (`quality_readonly.py`)
+
+**Question answered:** given a prompt, does the agent's answer satisfy a human-written rubric?
+
+### The run stage
+
+The agent gets exactly the same read-only tool surface as invocation (`Read`, `Grep`, `Glob`, `Skill`) with a longer turn budget (`QUALITY_READONLY_RUN_MAX_TURNS = 15`, because reasoning without tools is cheap to let run longer).
+
+Crucially, `ClaudeAgentOptions(skills=[...])` only makes a skill *available* — the model still decides whether to invoke it, and left to its own devices it will often just answer from general knowledge. So every test prompt is wrapped in `QUALITY_RUN_PROMPT_TEMPLATE` (`quality_prompts.py`), which:
+
+1. Forces the `Skill` tool to fire first (`'First use the Skill tool to invoke the "{skill_name}" skill...'`).
+2. Tells the agent explicitly that it is read-only and must **describe** the procedure rather than perform it — "assume every prerequisite is settled... never fabricate the results of actions you did not perform."
+
+The judge only ever sees the bare, un-wrapped test prompt — the invocation instruction is a run-time detail, not part of what is being graded.
+
+### The judge stage — two-stage G-Eval (`judge.py`)
+
+**Stage 1 (`generate_eval_steps`):** the rubric is rewritten into 3–7 concrete, checkable criteria by an LLM call at `temperature=0`. This can be skipped entirely (`rewrite_rubric=False`), in which case the raw rubric is graded as a single criterion. Stage 1 **never raises** — any parse failure or LLM error returns `[]`, which stage 2 then falls back on (grading against the raw rubric). This asymmetry is deliberate: a broken step-generation call should degrade the grading, not crash the whole test.
+
+**Stage 2 (`score_against_steps`):** one holistic score, 1–10, against the (possibly single-criterion) step list, normalized to `[0, 1]` (`score = round(raw_score) / 10`). Key behaviors:
+
+- **Never clamps an out-of-range score.** A reply outside `[1, 10]` is re-asked (`JUDGE_SCORE_ATTEMPTS = 2` total attempts) with the *identical* prompt; if still unusable, the row **errors** with `score: 0.0` as an explicit sentinel — clamping would have silently turned, say, a 0–100-scale mistaken reply into a passing `1.0`.
+- **A failed call is not retried at this layer** — `man.ai` already retries transient 429/5xx underneath, so a raised exception here means the underlying client has already given up.
+- `parse_outer_json_object` is deliberately tolerant: it regex-extracts the outermost `{...}` from the reply text, so code fences or a stray preamble sentence don't break parsing.
+- `extract_message_text` only ever joins `text`-type content blocks (never `thinking`), and joins them **without a separator** — an inserted newline could otherwise corrupt a split JSON string mid-token.
+
+### Prompt-shaping for the read-only sandbox (`quality_prompts.py`)
+
+Both judge stages are told, verbatim, that the agent ran with only `Read`/`Grep`/`Glob`/`Skill` and could not execute anything. Two consequences are hard-coded into the judge instructions:
+
+- **Stage 1** is told to phrase every criterion so it is checkable against a *described* procedure — an action-shaped rubric requirement ("downloads the file") is treated as met when the assistant correctly *specifies how*, not only when something was actually executed.
+- **Stage 2** is explicitly told **not** to penalize the agent for describing instead of doing — but **is** told to still penalize a hallucinated endpoint, a missing required parameter, or an ignored documented constraint. The line the judge is meant to draw is "wrong/invented procedure" (a real defect) vs. "didn't literally run it" (expected here, not a defect).
+
+### Everything a rubric can't see: the transcript trace
+
+The judge only ever scores the agent's final text. But every message from the run is also parsed by `transcript.py` into a `trace` dict attached to the row — the full step-by-step record of tool calls, arguments, results, and the model's own reasoning — so a human reviewing a failing test can see *why* without re-running anything (see §9).
+
+## 7. Dimension 2, tool-enabled mode (`quality_tool_use.py`)
+
+**Question answered:** does the skill actually work, for real, not just as a described plan?
+
+This mode re-runs the exact same `quality.tests` (same `prompt`/`rubric` pairs) that read-only quality uses, but replaces the read-only run with real execution, and lands its result on the **same** `report.quality` slot with `enableTools=True` — it is a *mode* of the quality dimension, not a separate `EvalType`. Reached only via `run_eval(..., enable_tools=True)`.
+
+### What's actually different from read-only, and why each difference matters
+
+| Aspect | Read-only | Tool-enabled | Why |
+|---|---|---|---|
+| Tool surface | `Read`, `Grep`, `Glob`, `Skill` | `{"type": "preset", "preset": "claude_code"}` — the full Claude Code toolset, including `Task` | The agent needs Bash/network/write access to actually do anything real. |
+| Permission mode | `"default"` | `"auto"` | Auto mode's LLM classifier reviews every non-allowlisted call — this **is** the entire guardrail; there is no OS sandbox underneath it. |
+| `allowed_tools` | Set to the readonly surface (harmless — nothing mutating is on the surface to auto-approve) | **Must stay empty** | An `allowed_tools` entry is an *allow rule*, and allow rules are consulted **before** permission mode. Naming even one tool there would silently disarm the classifier for that tool. A dedicated test (`test_allowed_tools_is_empty_so_the_classifier_runs`) guards this. |
+| Bound | Turn cap only | Dollar budget (`max_budget_usd=10.0`) **plus** a generous turn cap (100, backstop only) | Cost, not step count, is the meaningful ceiling once the agent can actually do work. |
+| Sandbox lifetime | One shared sandbox for the whole run | **One fresh sandbox per test** | Sharing one writable directory across concurrent tests would let one test's file survive into another's run, or let two tests race on writing the same path — a reproducibility bug that would be invisible in the report. |
+| `strict_mcp_config` | not set | `True` | Otherwise `setting_sources=["project"]` would pull in any MCP servers declared in a project `.mcp.json` — and auto mode judges *destructiveness*, not *blast radius*, so an MCP call that reaches Slack/Snowflake/PAM in production could read as entirely legitimate intent. |
+
+### The preflight gate (`_require_permission_classifier`)
+
+Before *anything* else — before path resolution, before reading config — `execute_tool_use` calls `_require_permission_classifier()`, which raises if `DISABLE_AUTO_MODE` or `CLAUDE_DISABLE_AUTO_MODE` is set in the environment. Since auto mode's classifier is the *entire* guardrail on this dimension, an environment with it switched off would run every tool call completely unclassified — the function refuses outright rather than silently downgrading to a "safer-looking" mode. This same check is duplicated in `run.py` (imported back from `quality_tool_use`) so it fires before the loud disclosure banner even prints, and again inside `execute_tool_use` itself, since it is a public export that could be called directly, bypassing the `run.py` wrapper.
+
+### The disclosure banner
+
+`run.py`'s `tool_eval_banner()` prints, **unconditionally** (there is no env var that suppresses it), before the first tool-enabled subprocess spawns:
+
+```
+================================================================================
+TOOL-ENABLED EVAL: <skill-name>
+================================================================================
+This run EXECUTES REAL COMMANDS. It is not sandboxed at the OS level.
+  permission mode : auto (LLM classifier judges every call)
+  tool surface    : preset:claude_code (all Claude Code tools, including Task)
+  MCP servers     : none (strict_mcp_config)
+  concurrent runs : <N>
+
+The classifier judges destructiveness, not blast radius,
+so a legitimate-looking call to production will be allowed.
+================================================================================
+```
+
+The module docstring is blunt about why this is the *whole* containment story: "this is NOT sandboxed at the OS level; Bash plus the internal network reaches everything a headnode can reach." Containment is three things, none an OS boundary: the dimension is reachable only through an explicit `enable_tools=True` argument, every non-allowlisted call goes through the classifier, and the run is loudly disclosed first.
+
+### `keep_sandbox`
+
+Normally each test's per-test sandbox is deleted on teardown. `keep_sandbox=True` (which requires `enable_tools=True` — checked and rejected otherwise in `run.py`'s `_check_keep_sandbox`) leaves the directory on disk and records its path on that test's row (`sandboxPath`), so a human can inspect exactly what files the skill wrote. The caller is responsible for deleting these afterward — the library does not.
+
+### The rubric's meaning shifts
+
+`quality_prompts.py`'s `TOOL_USE_RUN_PROMPT_TEMPLATE` and its judge-facing `TOOL_USE_STEPS_CONTEXT`/`TOOL_USE_SCORE_CONTEXT` counterparts say the exact opposite of the read-only versions: the agent is told it has real tools and must **carry out** the request, and the judge is told to grade the actual outcome, not a described plan. Everything else about the two-stage judge machinery is identical — the intent is that a read-only score and a tool-enabled score for the *same test* differ only in "did the description hold up under real execution," not in judging methodology.
+
+## 8. The safety architecture: keeping the answer key out of reach
+
+`eval.yaml` (and its `.yml` alias) is the answer key — it holds every prompt and rubric the run is graded against. If the agent under test could read it, it could pattern-match the rubric instead of actually doing the work. Two independent layers enforce this, and the module docstring for `guard.py` is explicit that this is a **correctness control, not a security control** — it targets the accident (a `SKILL.md` that happens to tell the agent to open `eval.yaml`), not a determined adversary.
+
+**Layer 1 — it's never copied in.** `sandbox.py`'s `prepare_sandbox` builds the sandbox with `shutil.copytree(..., ignore=shutil.ignore_patterns(*RESERVED_EVAL_FILES))`. The file simply does not exist inside the sandbox, at any depth.
+
+**Layer 2 — a `PreToolUse` hook denies any call that *reaches back out* to the original.** `guard.py`'s `answer_key_hooks()` installs one rule on `Read|Grep|Glob|Write|Edit|NotebookEdit|Bash`: if any path-shaped argument resolves (after `~` expansion and relative-to-cwd resolution) to a basename in `RESERVED_EVAL_FILES`, the call is denied with a legible reason. For `Bash`, the command string is naively split on whitespace and `=`/`;`/`|` (catching both `cat eval.yaml` and `F=eval.yaml; cat $F`-style tricks), skipping anything that looks like a flag.
+
+**Known, accepted gaps**, stated directly in the docstring:
+
+- The Bash-side check is a static token scan — it misses quoting tricks, reads performed from another language runtime, or a directory sweep that happens to include the file without ever naming it.
+- `copytree` dereferences symlinks, so a symlink pointing at the config would land in the sandbox under a different name and slip past the exclusion.
+
+Both hooks are installed even for dimensions where `Bash` is not on the tool surface — a matcher for an absent tool simply never fires, and that's cheaper than maintaining two separate entry points that could drift apart.
+
+## 9. Sandbox mechanics (`sandbox.py`)
+
+`prepare_sandbox(skill_dir, supporting_skills=(), keep=False)` is a context manager. It:
+
+1. Validates the folder has a `SKILL.md` (raises `ValueError` otherwise — "not a skill folder").
+2. Creates a fresh `tempfile.mkdtemp(prefix="man-evals-sandbox-")`.
+3. Copies the skill into `<tmp>/.claude/skills/<skill-name>/` — the exact layout the agent SDK discovers skills from — excluding `RESERVED_EVAL_FILES`.
+4. Materializes any resolved `SupportingSkill` entries as siblings under the same `.claude/skills/` root, with the same exclusion.
+5. Yields a `Sandbox` dataclass (`root`, `skill_name`, `skill_md_short_sha`, `source_dir`, `supporting_skills`).
+6. On exit, deletes the whole temp tree — unless `keep=True`.
+
+**`skill_md_short_sha`** is computed with `_git_blob_short_sha`, which reproduces `git hash-object`'s algorithm exactly (`sha1("blob %d\0" % len(data) + data)`, first 7 hex chars) — not a plain content digest. This is deliberate: skills live in git repos, so the recorded snapshot hash is directly checkable against `git log`/`git cat-file` with stock tooling, and matches whatever other tooling (e.g. the Skill Manager server) records from the same git blob.
+
+**`resolve_supporting_skills(paths, primary_name)`** validates every dependency path up front (must be a directory with `SKILL.md`) and raises `ValueError` on any name collision — either with the primary skill or between two supporting skills — *before* any sandbox is built, so a config mistake costs nothing.
+
+**`dependencies_payload`** is the single, deliberate choke point that turns internal `SupportingSkill` objects (which carry `source_dir`, a local filesystem path) into the report-safe `{name, skillMdShortSha}` shape — `source_dir` must never leak into a persisted or printed report.
+
+## 10. Concurrency and stream handling (`_harness.py`)
+
+### `fan_out` — the one concurrency primitive every dimension shares
+
+```python
+results, timed_out = await fan_out(items, run_one, concurrency=N, whole_run_timeout_s=T, ...)
+```
+
+Design points that are easy to get wrong and are handled explicitly here:
+
+- **The semaphore is passed into `run_one`, not acquired by `fan_out` itself** — every dimension acquires it only around the CLI-subprocess-spawning stage, releasing it before the judge's plain-HTTP calls run. A slot held across the judge phase was measured to cost 20–25% throughput on a saturated run.
+- **`run_one` must never raise.** A raising coroutine is silently *dropped* from the results (with its exception logged, traceback included) rather than surfacing as a result row — every dimension's `run_one` wrapper therefore catches everything itself and turns a failure into an errored *row*, so the reported total never silently shrinks.
+- **Whole-run timeout uses `asyncio.wait(..., timeout=...)`, not `wait_for(gather(...))`** — specifically so a timeout doesn't discard results that already finished; only the tasks still pending at the deadline are cancelled.
+- **Results preserve input order**, not completion order, since callers pair them back up with their original test entries.
+
+### `drain_stream` — never orphan a subprocess
+
+Every `claude_agent_sdk.query()` call spawns a real CLI subprocess (measured ~280–330 MB resident). `drain_stream` fully consumes the stream via a synchronous `on_message` callback (not an async generator) so a caller **cannot** `break` out early and leave the subprocess running with its semaphore slot already released — this exact bug class is called out as the reason the callback shape was chosen over the more idiomatic-looking generator. `except Exception` deliberately does **not** catch `CancelledError`, so a real timeout cancellation still propagates; `finally: await stream.aclose()` runs regardless of how the loop exits.
+
+Expected "limit stop" results (`hit_turn_cap`/`hit_budget_cap`/`hit_run_limit`) are tolerated rather than raised — hitting a turn or budget cap is a normal way for a run to end, not a failure. `raise_on_error_result` exists because the CLI can report `is_error=True` with `subtype` still `"success"` (observed with API auth failures, where `api_error_status` carries the real HTTP code) — without this, the SDK's own trailing exception says only the unhelpful "error result: success"; this function surfaces the actual reported text (e.g. "Invalid API key ... (API status 401)") instead.
+
+### `run_judge_phase` — shared by quality and tool-use
+
+Both quality modes call this exact function for their steps-then-score judging, differing only in the `context` string injected into the judge prompt (`steps_context`/`score_context`, `None` for read-only, the `TOOL_USE_*_CONTEXT` strings for tool-enabled). `generate_steps` and `score` are passed in as callables *by the caller's own module-level names* rather than imported directly inside `run_judge_phase` — this is specifically so a test's `monkeypatch.setattr(quality_readonly, "generate_eval_steps", fake)` keeps working, since the patch target is the caller's namespace, not `judge.py`'s.
+
+## 11. Report payloads and the public API surface (`report.py`)
+
+### Byte-compatibility, and why it's load-bearing
+
+Every field name in the payload models (`skillName`, `runId`, `ranAt`, `durationMs`, ...) is **camelCase**, which is unusual for Python but deliberate: these payloads must stay byte-compatible with the Skill Manager server's persisted `eval_results` JSONB rows (see the companion integration doc). Schema changes are additive-only; a set of "frozen-shape" tests in `test_report.py` pin the exact key sets (`assert set(payload) == {...}`) so an accidental field rename fails CI immediately rather than silently breaking the other codebase months later.
+
+### The payload models
+
+- `InvocationTestResult` / `InvocationResultPayload` — per-test `{id, prompt, triggered, passed, error}`, aggregated with `skillName`, `runId`, `ranAt`, `ranBy`, a `snapshot` (`skillMdShortSha`), `dependencies`, `durationMs`, `model`, a `summary` (`{passed, total}`), and separate `positive`/`negative` result lists.
+- `QualityTestResult` / `QualityResultPayload` — per-test `{id, prompt, rubric, evaluationSteps, output, passed, score, judge, trace, error}` (plus `sandboxPath` only on executed rows with `keep_sandbox=True`), aggregated similarly, with `enableTools`, `permissionMode`, and `toolSurface` fields that **default to describing the read-only run** — so a historical row from before this discriminator existed backfills honestly under `exclude_none`, and an executed run must explicitly override all three so the recorded surface is never *inferred*.
+- Both payloads carry `partial: bool | None` and `incompleteReason: str | None`, set only when the whole-run timeout fired — `None` (omitted under `exclude_none`) means "ran to completion," never a false `False`.
+- `trace["totals"]` on a `QualityTestResult` is the **single** place per-test counts live — the model deliberately does not mirror a separate count field elsewhere, because two numbers that are supposed to always agree are a bug waiting to happen.
+
+### `EvalReport`
+
+The object every `run_eval()`/`arun_eval()` call returns — one JSON-able payload dict per dimension that actually ran (`invocation`, `quality`, either possibly `None`).
+
+- `pass_rate` — sums `passed`/`total` across whichever dimensions ran; `0.0` if none did.
+- `summary(color=None)` / `trace(test_id=None, color=None)` — delegate entirely to `render.py` (see §12); `report.py` holds no rendering logic itself.
+- `__str__` (not `__repr__`, deliberately, so `repr()` of a list of reports stays short) returns `self.summary()`, so `print(report)` is the entire "happy path" — **no entry point in this library ever prints a result for you**; the tool-eval disclosure banner is the sole, deliberate exception.
+- `_repr_pretty_` — an IPython display hook (duck-typed, not imported, so it costs nothing outside a notebook) that renders plain (no ANSI) since notebook color support varies.
+- `to_json(path=None)` — the exact payload dicts, unmodified, as JSON text; optionally written to disk.
+
+### The public export list (`__init__.py`)
+
+Exactly 10 names are re-exported at the top level: the two entry points (`run_eval`, `arun_eval`), the result types (`EvalReport`, `EvalType`, `ProgressEvent`, `ProgressCallback`), and the four config types the `config=` keyword accepts (`EvalConfig`, `EvalInvocation`, `EvalQuality`, `EvalQualityTest`). Everything else — `prepare_sandbox`, `execute_invocation`/`execute_quality`/`execute_tool_use`, the payload models, `ENGINE_VERSION`, `format_trace`, `answer_key_hooks`, `parse_transcript`, `parse_eval_yaml`/`serialize_eval_config` — is deliberately *not* re-exported, importable instead from the specific module that owns it. The stated rule for what earns top-level status: **would an `examples/` script have to import it to use the library?** If no caller running an eval actually writes that name, it stays off the front door.
+
+## 12. Rendering (`render.py`) and live progress (`console.py`)
+
+`render.py` is a set of **pure functions of the payload dicts** — nothing here holds state, and the same function renders identical text whether given a live run's fresh payload or a payload read back out of a database years later. `report.py` depends on `render.py`, never the reverse, so there is no import cycle.
+
+Color is plain **ANSI escapes**, explicitly never `rich` markup — prompts and error strings routinely contain literal `[...]`, which `rich` would try to parse as console markup and mangle. The "plain" palette (`_PLAIN`) is all empty strings, so disabling color produces text that is byte-identical to the colored version with the escapes stripped — this is what lets exact-text snapshot tests pin the plain-text path. `_color_enabled()` honors `NO_COLOR` and `TERM=dumb`, and checks `sys.stdout.isatty()` defensively (tolerating a closed or captured stream, as under pytest). The stats-line separator (`" | "`) is deliberately plain ASCII, not a Unicode dash — a stdout with no locale set (`LC_ALL=C`, some Windows consoles) would otherwise crash with `UnicodeEncodeError` partway through printing a report for a run that had already spent real money.
+
+`console.py` draws live `rich` progress bars **only when there is a real terminal to draw them on**. Two subtle interleaving problems are solved explicitly:
+
+- `man.evals` does not suppress its dependencies' own console/log output, so `man.ai`'s auth diagnostics and the agent SDK's own per-subprocess log lines can land on the terminal mid-run. `rich`'s lazy `Console.file` resolution means dependency-created `Console()` objects print *above* a live display automatically — but a `logging.StreamHandler` installed via the caller's own `logging.basicConfig()` captures its target stream at construction time and would tear straight through the live bar. `LiveProgress._retarget_log_handlers` exists specifically to fix that.
+- The bundled `claude` CLI subprocess writes to an **inherited file descriptor**, which no Python-level redirect can intercept — `_deps.forward_cli_stderr` pipes that output into the logging system specifically so it becomes subject to the mitigation above. The module docstring is explicit: removing `forward_cli_stderr` will silently break the progress bars.
+- Anything that still writes at the raw fd level bypasses all of this; accepted as a known gap, since `rich` re-renders ~10 times a second (so a torn frame heals within ~100ms) and `dup2`-level capture would break debuggers and swallow tracebacks.
+
+## 13. The `man-evals` CLI (`cli.py`)
+
+Adds **no** engine behavior — it only parses arguments, calls `run_eval`, prints, and maps the outcome to a process exit code.
+
+```bash
+man-evals run [SKILL_DIR]                 # SKILL_DIR: a skill folder, or an eval.yaml path directly
+  [--run-model MODEL] [--judge-model MODEL]
+  [--pass-threshold FLOAT]
+  [--rewrite-rubric | --no-rewrite-rubric]
+  [--enable-tools] [--keep-sandbox]
+  [--concurrent-runs N]
+  [--no-progress-bars]
+  [--json | --output [PATH]]              # mutually exclusive
+man-evals --version
+```
+
+If `SKILL_DIR` is a *file* (an `eval.yaml` path), it is parsed directly and its parent directory is used as the skill folder — letting a caller point at a config that lives somewhere other than the skill's own root. `--output` with no value defaults to `./eval-result.json`; `--output` and `--json` are enforced mutually exclusive by `argparse`, because `--enable-tools` always prints the disclosure banner unconditionally, which would corrupt a "JSON-only stdout" contract — `--output` (which still prints the human report to stdout, just *also* writes JSON to a file) is the documented way to get a JSON artifact out of a tool-enabled run.
+
+**Exit codes** (`_exit_code`): `0` only for a complete run where every dimension that ran is fully passing and non-partial; `1` for any failed test, any errored test, or a whole-run timeout (`partial: true`); the top-level `main()` additionally maps `FileNotFoundError`/`ValueError`/`RuntimeError` to `2` (usage/config/environment problems) and `KeyboardInterrupt` to `130` (the POSIX convention for SIGINT).
+
+## 14. The Python API, exactly (`run.py`)
+
+```python
+run_eval(
+    skill_dir=".", *, config=None, enable_tools=False, keep_sandbox=False,
+    supporting_skills=(), on_progress=None, show_progress=True,
+    concurrent_runs=10, run_model=None, judge_model=None,
+    pass_threshold=None, rewrite_rubric=None,
+) -> EvalReport
+
+arun_eval(...)   # identical signature, show_progress defaults to False instead
+```
+
+`run_eval` is `asyncio.run(arun_eval(...))` — a thin sync wrapper; the **only** difference between the two is which way `show_progress` defaults, since a sync caller is almost always a terminal/CLI context and an async caller is almost always a server embedding the engine in its own event loop, where drawing bars would be wrong.
+
+**Argument validation order in `arun_eval`**, all of which happens *before* any sandbox or subprocess is created:
+
+1. Unknown `**kwargs` raise `TypeError` immediately (`_resolve_override_kwargs`) — a typo like `judgemodel=` fails loudly instead of being silently ignored.
+2. `keep_sandbox=True` without `enable_tools=True` raises `ValueError` — a read-only run writes nothing, so there would be no directory to keep.
+3. If `enable_tools=True`, the permission-classifier preflight runs (`_require_permission_classifier`).
+4. Both override models are checked against their allow-lists.
+5. The skill directory and its `eval.yaml` (or the caller-supplied `EvalConfig`) are resolved and parsed — `ValueError`/`FileNotFoundError` here means a config problem, not a run failure.
+6. Every model/threshold/rewrite-rubric knob for whichever blocks are actually present is resolved to a concrete value.
+7. A run with **no** invocation and no quality tests defined raises `ValueError` — running "nothing" is treated as a configuration mistake, not a silent no-op.
+8. `enable_tools=True` with **no** quality tests defined raises `ValueError` — this dimension exists to execute the quality block; degrading silently to an invocation-only run under the (unconditionally printed) tool-eval banner would be actively misleading.
+
+Only after all of that does the tool-eval banner print (if applicable), a shared `run_id` is minted (both dimensions in one call share it), and `LiveProgress` becomes the outer context manager so any teardown logging renders *above* the finished bar rather than corrupting it.
+
+## 15. Testing conventions — and why they matter for the design
+
+The full suite (`pytest tests`, `asyncio_mode = auto` set in `setup.cfg` so bare `async def test_...` works with no `@pytest.mark.asyncio` decorator) is **entirely offline** — no network call, no real LLM spend, ever, for a bare `pytest`. Both the agent SDK and the man.ai judge client are faked, never mocked with `MagicMock`:
+
+- **Mocking is done by monkeypatching the *name in the module under test*** — `monkeypatch.setattr(quality_readonly, "query", fake)`, never by patching the upstream `claude_agent_sdk` library itself. This is precisely why several functions (`_run_skill_for_output`, `_run_one_quality_test`, etc.) deliberately call `query()` *inside their own module* rather than importing a pre-bound reference — the patch target has to be that module's own name.
+- **Fakes are hand-built async generators yielding real, hand-constructed `claude_agent_sdk` objects** (`AssistantMessage`, `ToolUseBlock`, `ResultMessage`, ...), not loosely-typed mocks — this catches the class of bug where the production code expects a real attribute or type that a `MagicMock` would have silently satisfied.
+- **The judge is faked at two levels.** `test_judge.py` patches `judge.chat_complete` directly (testing the JSON-parsing and retry logic in isolation); every *consumer* of the judge (quality, tool_use) instead patches `generate_eval_steps`/`score_against_steps` on its **own** module — exactly the pattern `run_judge_phase`'s by-name callable parameters exist to support.
+- **Timeouts are tested by shrinking the module-level timeout constants via monkeypatch**, never by actually waiting out a real timeout in a test.
+- **No `conftest.py`** — fixtures are defined per test module and *deliberately duplicated* rather than shared, a stated convention to keep each test file legible in isolation.
+- **Parallel-safety is mandatory** — CI runs `pytest -n 4` (`xdist`), so every test uses `tmp_path`/`monkeypatch`, never a shared writable path.
+- There used to be an AST-walking test enforcing "no server/DB/CLI-framework imports" in this package; it was **removed**, and that boundary is now enforced by convention plus code review, not tooling — worth knowing if you're deciding whether to add a new dependency.
+
+## 16. Demo skills and examples
+
+`examples/demo-skills/` holds four skills used by the runnable scripts and the docs:
+
+- **`slack/`** — the canonical *authoring reference* for `eval.yaml` (read-only dimensions only — see the warning below).
+- **`log-digest/`** — the one skill it is safe to run with `enable_tools=True`: its data is a bundled, inert local log file (`data/access.log`), and its `eval.yaml` rubrics encode *exact ground truth* derived from that file's actual contents (the file's own header comment says as much — read it before editing either side).
+- **`permalink/`**, **`web-fetch/`** — smaller examples; `web-fetch/` deliberately ships with **no** `eval.yaml`, so the example scripts skip it.
+- **`slugify/`** — a `SKILL.md`-only skill with no evals at all.
+
+**`slack/` must never be run with real tool execution** — its `eval.yaml` is valid, but a real tool-enabled run would post to an actual Slack channel. The auto-mode classifier judges *destructiveness* of an individual call, not the blast radius of what that call actually does in the world — a well-formed Slack post reads as entirely legitimate to it.
+
+`examples/01`–`04` each demonstrate exactly one API surface: `01_run_eval.py` is the quickstart (`run_eval` + `to_json`); `02_run_eval_with_tools.py` is the only script in the repo that actually sets `enable_tools=True` (against `log-digest`); `03_model_overrides.py` shows the override kwargs; `04_async_usage.py` shows `arun_eval` inside an existing event loop. `05_supporting_skills.py` demonstrates `supporting_skills=`.
+
+## 17. Load-bearing design decisions, collected
+
+These are decisions where undoing them would silently reintroduce a real bug, per the repository's own `CLAUDE.md`:
+
+- **Never let a tool-enabled eval get silently downgraded** — to `bypassPermissions`, or to the read-only tool surface. A "green" result from a downgraded run is a false claim about what was actually tested.
+- **`allowed_tools` must stay empty** in the tool-use options builder specifically — see §7's table. A named test exists solely to guard this one line.
+- **Always fully drain and `aclose()` a `query()` stream** — an early return orphans a ~280 MB CLI subprocess whose semaphore slot has *already* been released, silently over-subscribing the concurrency limit.
+- **Limit stops (turn cap, budget cap) are normal, not failures** — detected only by structured `ResultMessage.subtype`, never by matching on message *wording*, since wording is not a contract the CLI promises to keep stable.
+- **Honest gaps over convenient zeros** (`transcript.py`) — an unknown quantity (e.g. `wall_seconds` when there was no `ResultMessage` at all, as on a timeout) is recorded as `null`, never `0`. A `0` would be an actual, false claim; `null` merely declares the gap.
+- **Truncation is always in-band** — a shortened string in a transcript always ends with an explicit `... [truncated: N of M chars shown]` marker, so a reader (human or judge) can never mistake a partial value for a complete one.
+
+## 18. Framing this for the report
+
+The technically interesting thread running through this codebase is not "an LLM judges another LLM's answer" — that idea is simple. It's the *engineering discipline* wrapped around a fundamentally non-deterministic, occasionally-adversarial system: a testing framework whose "test runner" is itself an AI agent that could, if not carefully bounded, read its own answer key, run forever, spend unbounded money, or reach a real production system while looking completely legitimate to an automated safety check.
+
+Nearly every module in this repository is best read as an answer to one instance of "what happens when this specific thing goes wrong," made explicit and then defended with a dedicated line of code and often a dedicated test: a subprocess that never gets cleaned up (`drain_stream`), a judge that returns garbage (`_verdict_or_reason`, never clamped), a skill that reads its own grading rubric (`guard.py` plus sandbox exclusion, two independent layers), a "safe" execution mode that turns out not to be safe at all if one keyword argument is copied from the wrong place (`allowed_tools` in `quality_tool_use.py`). That pattern — defense in depth against a system you cannot fully specify the behavior of in advance — is arguably the more transferable lesson here than the specific choice of G-Eval or Claude Code.

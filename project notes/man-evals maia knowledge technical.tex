@@ -1,0 +1,249 @@
+# How `man.evals` Fits Into the Broader Maia Knowledge Platform — Complete Reference
+
+This note complements `man-evals-internship-report.md`, which documents `man.evals` in isolation.
+This one documents the product it serves — **Maia Knowledge**, internally also called the **Skill Manager** (repo: `integrations-browser`) — in the same implementation-level depth: its architecture, its *own* embedded eval stack (which is not yet the same code as `man.evals`), the concrete differences between the two, the `maia` CLI, and the full multi-phase roadmap for bringing them together. Citations are to real files, functions, and constants so the doc stays checkable against the code.
+
+## 1. The four-repo ecosystem
+
+| Repo | Forgejo path | Role |
+|---|---|---|
+| `man.ai` | `CORE/man.ai` | Foundation SDK: ManGPT chat/tools/embeddings/vision client, plus a Claude Agent SDK wrapper. Everything else depends on this for LLM access. |
+| `integrations-browser` | `AI/integrations-browser` | **The product.** FastAPI backend + React SPA + Postgres. Where people author skills, run evals, and commit changes. |
+| `maia-evals` | `MAIA/maia-evals` | The extracted, standalone `man.evals` engine (see the companion doc). |
+| `evals-gui-demo` | `dylim/evals-gui-demo` | Static, build-free HTML prototypes of a hosted eval-results site. No backend, hardcoded data. |
+
+`integrations-browser` is deployed at `https://skill-manager.dev.m`, on Man Group's `gdc-sole` Kubernetes cluster in the `man-mangpt-portal` namespace, via the internal NCD (No-Click-Deploys) pipeline.
+
+## 2. What Maia Knowledge actually is, architecturally
+
+### 2.1 The core idea: skills live outside this repo
+
+A **skill** is a directory with `SKILL.md` (YAML front-matter — `name`, `description`, `allowed-tools` — plus Markdown instructions) and an optional `eval.yaml`. Skills are **not** stored in `integrations-browser` itself; they live in separate git repos called *marketplaces* (canonically `ai.integrations` on Forgejo, referenced via `.claude-plugin/marketplace.json`). Maia Knowledge is a browser-based front end and API onto those external repos — every read and write of a skill's actual content goes through the **Forgejo API**, not a local filesystem or a database table holding file contents.
+
+### 2.2 Multi-repo architecture
+
+The set of configured skill repos is **not** an environment variable — it is a row-per-repo Postgres table, `configured_repos` (seeded by Alembic migration `014`, the oldest row is the "primary"). At startup, `lib/repos.py:load_configured_repos_from_db` reads that table and calls `set_configured_mirrors` to build an in-memory registry of `RepoMirror` instances (`lib/mirror/`), one per configured repo:
+
+| Function | Purpose |
+|---|---|
+| `get_primary()` | first mirror — the backward-compatible singleton |
+| `get_all_mirrors()` | every mirror, in declaration order |
+| `get_mirror_for_url(url)` | look up by remote URL |
+| `get_mirror_for_skill(entry)` | dispatch to whichever mirror owns a given skill (falls back to primary) |
+
+Skills, plugins, and marketplaces are all repo-aware: every DB row is keyed by `repo_url`. `discover_skills()` iterates every configured mirror in order and merges results, with the primary repo winning on a name collision. Each skill entry carries `repoUrl`/`repoLabel` so route handlers know which Forgejo repo to dispatch a given read/write/PR to. Repos are added/removed at runtime through the UI (**New ▾ → Add repository**) or `POST`/`DELETE /api/repos/config` — gated to Forgejo admins on that repo, an email on a hardcoded allowlist, or an app superuser (`GET` is open to any authenticated user).
+
+### 2.3 Auth
+
+Two separate identity systems are layered:
+
+- **Forgejo OAuth2** (`lib/auth.py`) is the login flow — Forgejo itself delegates to **Keycloak** for the actual credential check. A session cookie (`SESSION_SECRET`-signed) tracks the logged-in user; `AUTH_ENABLED=0` disables all of this for local development (the "v1 permission-gated" routes then 501, since there's no identity to authorize against).
+- **"RFC v2" auth** (`lib/auth_service.py`, `lib/forgejo_perms.py`, `lib/keycloak.py`) is a DB-backed permission layer sitting on top of the OAuth identity — used for the `/api/v1/*` routes (per-resource grants on skills/plugins/marketplaces) and for checking Forgejo repo ACLs directly.
+
+Git write operations always go through the Forgejo API — the server never has a local git checkout of a marketplace repo. Each user editing a public skill gets a **per-skill branch**; changes land as a PR (or a direct commit, depending on the resolved `write_mode` — see §3.4).
+
+### 2.4 Read-only mode
+
+A single env var, `READ_ONLY_MODE`, flips the whole deployment cosmetically read-only: the frontend hides "New"/edit UI and edit-only routes redirect home; `GET /api/config` exposes `{"readOnly": bool}` combining that flag with a per-user Forgejo-write check. It is explicitly **cosmetic only** — every backend write path independently re-enforces its own permission checks regardless of this flag. It is `0` on the dev deployment and `1` on the "research" deployment today.
+
+## 3. The embedded eval stack (`lib/evals/` + `routes/skills/evals.py`)
+
+This is the code that **actually runs today** when a user clicks "Run" in the Skill Manager UI. It predates, and is not yet replaced by, `man.evals` — the two are separate codebases kept output-compatible (see §4 for exactly how they differ).
+
+### 3.1 Module map
+
+```
+lib/evals/
+  config.py              eval.yaml schema (near-identical to man.evals's, plus matches()
+                          and validate_models() — see §4)
+  constants.py            server-specific tuning knobs + curated dropdown option lists
+  runner.py               RunState / ActiveRunState registry, run-id helpers,
+                           skill materialization (Forgejo -> temp dir), DB persistence
+  invocation_runner.py     invocation dimension execution
+  quality_runner.py        quality dimension execution
+  judge_prompts.py         judge prompt templates (ported into man.evals's quality_prompts.py)
+  suggest_prompts.py       prompts for the AI-assisted "suggest" endpoints (skill/eval drafting)
+```
+
+The HTTP surface lives separately, in `routes/skills/evals.py`.
+
+### 3.2 The in-memory run registry (`runner.py`)
+
+Runs are **async fire-and-forget**: a `POST` handler returns `202` immediately and hands off to `asyncio.create_task(...)`; the frontend then polls a status endpoint. In-flight state is tracked entirely in memory (not the database) by a single process-wide singleton:
+
+```python
+RunKey = tuple[uuid.UUID, str, EvalType]   # (skill.integration_id, username, kind)
+
+class ActiveRunState:
+    def is_running(key) -> bool
+    def start(key, total) -> RunState
+    def sweep_terminal(now=None)           # evicts done/error entries older than TERMINAL_TTL_S
+```
+
+Keying by `integration_id` (a globally unique UUID) rather than by skill *name* matters because names can collide across repos in the multi-repo model — the run registry must not conflate two different skills that happen to share a name. Keying by `(skill, user, kind)` — not just `(skill, kind)` — means two different users can run evals on the same skill concurrently without stepping on each other's progress tracking, and `invocation`/`quality` use **distinct** keys, so a `409 Run already active` on one kind never blocks starting the other.
+
+`sweep_terminal()` runs on every `POST`, evicting any `done`/`error` entry older than `TERMINAL_TTL_S` (5 minutes) — a cheap, always-on cleanup rather than a background timer.
+
+### 3.3 Skill materialization — reading from Forgejo, not disk
+
+`_materialize_skill` copies a skill's live content out of Forgejo into `<tmp>/.claude/skills/<name>/`, mirroring what `man.evals`'s `prepare_sandbox` does for a *local* folder — except the source here is a remote git tree fetched over HTTP, not a directory already on disk. Two separate code paths exist:
+
+- **Public/managed skills** (`_materialize_public_skill`) — read priority is **the user's own draft branch first, falling back to the repo's default branch**: `_get_user_tree(username, skill.name, token)` is tried, and any path it contains for this skill overrides the corresponding path from `_get_tree(token)` (the default-branch tree). This means running an eval always tests **your own uncommitted/unpushed edits** if you have a draft branch open, not just what's already merged.
+- **Private skills** (`_materialize_private_skill`) — read directly from a separate `private_mirror`, using the server's own `FORGEJO_TOKEN` (a service credential) rather than the requesting user's token, and resolved against the repo's default branch only (no draft-branch overlay).
+
+In both paths, `RESERVED_EVAL_FILES` (`{eval.yaml, eval.yml}`) are explicitly skipped during materialization — the same answer-key exclusion `man.evals`'s sandbox performs, just against a remote tree instead of a local copy. Every other file, text or binary, is materialized byte-for-byte, specifically so the eval sandbox is "byte-faithful to what `maia install` delivers" — an agent given real tools needs to be able to read a binary reference file the same way it would on a real install.
+
+### 3.4 Publishing `eval.yaml` back to git
+
+`POST /skills/{name}/evals/config` serializes the eval inputs and commits `eval.yaml` (only — results are never committed, they live in Postgres):
+
+- **Private skill** → a direct commit to `main` via the private mirror, using the server's own token.
+- **Public skill** → a commit to the user's own branch, plus an idempotent PR creation call — the response shape differs accordingly (`{ok, write_mode}` vs. `{ok, branch, write_mode, pr?}`).
+
+This path deliberately **bypasses** the general reserved-filename guard that blocks a user from directly hand-editing `eval.yaml` through the normal file-editing routes — publishing eval inputs through the dedicated evals UI is the sanctioned way to change this specific file; editing it as if it were an arbitrary text file is not.
+
+### 3.5 The HTTP surface (`routes/skills/evals.py`)
+
+| Method | Path | What it does |
+|---|---|---|
+| `GET` | `/skills/{name}/evals/config` | Parsed `eval.yaml` inputs. `404` if not committed; `422` if malformed/invalid models. |
+| `POST` | `/skills/{name}/evals/config` | Serialize + commit `eval.yaml` (see §3.4). |
+| `GET` | `/skills/{name}/evals/results` | Latest `invocation`+`quality` results. `?eval_type=` narrows to one side. `?match_config=true` (below) filters to runs whose *inputs* still match the current `eval.yaml`. |
+| `POST` | `/skills/{name}/evals/invocation-runs` | Start an invocation run. `202` + `{runId, status, startedAt}`; `409` if already running for this `(skill, user)`. |
+| `GET` | `/skills/{name}/evals/invocation-runs/status` | Poll `{status, runId, startedAt, finishedAt, progress, error}`. |
+| `POST` | `/skills/{name}/evals/quality-runs` | Start a quality run. Same `202`/`409` shape. |
+| `GET` | `/skills/{name}/evals/quality-runs/status` | Same polling shape. |
+| `GET` | `/evals/models` | Curated dropdown lists (`runModels`, `judgeModels`) plus resolved defaults. Lives outside `/skills/` because it isn't scoped to one skill. |
+
+**`match_config=true`** is a specific, deliberate feature: without it, `/results` just returns the *most recent* run regardless of whether the skill's `eval.yaml` has since changed — so a displayed "pass" could actually be describing an old, already-edited-away test. With it, `EvalInvocation.matches()`/`EvalQuality.matches()` (see §4) compares each candidate row's *recorded inputs* against the *current* `eval.yaml`, scanning back up to `MATCH_SCAN_LIMIT` (50) rows and returning the newest one whose prompts/rubrics/models are identical — so a displayed result can never silently drift from what's actually published. `404` fires if `eval.yaml` is missing or no run matches it at all; a malformed `eval.yaml` is a `422`, never silently swallowed into "no results."
+
+Every route resolves the run model / judge model / pass threshold with the same **request body > `eval.yaml` > default** precedence `man.evals` uses (see the companion doc, §3) — and deliberately **skips the Forgejo read entirely** when the request body already supplies everything needed, to avoid an unnecessary round-trip on the common case of the frontend sending fully-resolved values.
+
+## 4. Concrete differences between the embedded stack and `man.evals`
+
+These are not hypothetical — they are the actual, current point-in-time drift between the two codebases, useful to know if you ever need to reconcile them:
+
+| Aspect | `integrations-browser/lib/evals/` (embedded, live today) | `maia-evals`/`man.evals` (extracted) |
+|---|---|---|
+| `PROMPT_CONCURRENCY_DEFAULT` | **20** (pod-wide semaphore, sized for a 16 GiB pod at ~330 MB/subprocess) | **10** |
+| `INVOCATION_MAX_TURNS` | **5** | **3** |
+| `QUALITY_RUN_MAX_TURNS` | **15** (same) | **15** (same) |
+| `VALID_RUN_MODELS` | 8 entries — **no `claude-fable-5` family** | 10 entries — **includes `claude-fable-5`/`claude-fable-5[1m]`** |
+| Model validation | `EvalConfig.validate_models()` — an explicit method the route handlers call and map to a `422` | folded into each block's own `resolve_*` methods, raising `ValueError` directly at resolution time |
+| `matches()` | `EvalInvocation`/`EvalQuality` have a `matches(stored_result)` method, used for `?match_config=true` | **does not exist** — `man.evals` has no concept of "was this run's input the same as some other config," since it has no database of historical runs to compare against |
+| Tool-enabled ("live tools") mode | **not implemented** in the embedded stack at all — only invocation + read-only quality exist here | fully implemented (`quality_tool_use.py`) |
+| `TERMINAL_TTL_S`, `MATCH_SCAN_LIMIT` | exist (server-only concerns — an in-memory run registry, a "how far back to scan for a matching row" limit) | do not exist — `man.evals` has no run registry or result history to scan |
+
+The practical upshot: **the tool-enabled ("real execution") eval mode you'll find in `man.evals` today is not yet reachable from the Maia Knowledge web UI at all** — it exists only in the standalone package, runnable via its CLI or Python API, and has not yet been wired into `integrations-browser`'s routes. Anyone using `man.evals`'s `enable_tools=True` from this ecosystem today is, in effect, previewing a capability the product doesn't expose yet.
+
+## 5. The `maia` CLI
+
+A separate, standalone command-line companion to the web UI (`scripts/maia` bash wrapper + `scripts/maia_cli/` Python package), for browsing and installing skills into a **coding agent's own skills directory** (`~/.claude/skills/` for Claude Code/OpenCode, `~/.agents/skills/` for Codex — selected via `--harness`, default `all`). It talks to a *running* Skill Manager server; it is not itself a server.
+
+| Command | Purpose |
+|---|---|
+| `maia browse [NAME] [--type]` | List/search skills and plugins, or view one's detail. |
+| `maia install <ref> [--harness]` (`download`) | Install a skill or plugin; recorded in `~/.maia/maia.json`. Plugin install fans out one manifest entry per member skill. |
+| `maia install kb <owner>+<repo>` | Install a knowledge base — clones the repo once (shallow, sparse-checkout of just the registered subtrees) and drops a configured `SKILL.md` per selected harness. |
+| `maia sync [NAME] [--dry-run]` | Re-fetch every managed skill (or one) from upstream. |
+| `maia uninstall <ref>` (`remove`/`rm`) | Remove a managed install — deletes only manifest-owned directories, then drops the row. Fully offline. |
+| `maia validate [PATH] [--all] [--json]` | **Offline** contract check on a skill folder (front-matter, naming, links, secrets, size). Exit `0` clean / `4` no `SKILL.md` / `5` validation failed. Rules live in `scripts/maia_cli/skill_contract.py`, mirroring the server's own `validate_skill_content`. |
+| `maia link [PATH]` / `maia link skill\|plugin PATH` | **Symlink** a local skill (or every member of a local plugin) into the harness directory for live manual testing. Never evicts an occupied slot. |
+| `maia unlink [...]` | Remove a dev link. Plugin unlink uses the plugin's stored member inventory, so a renamed/deleted member still gets cleaned up. |
+| `maia status [NAME_OR_PATH] [--json]` | Read-only introspection of dev links — `ok`/`dangling`/`missing`/`replaced`/`foreign` per link, plus the source's current git branch. |
+
+**Name disambiguation:** if two configured repos both ship a skill with the same bare name, the first install keeps the clean name; a colliding later install from a different repo gets a disambiguated slug (`deploy` vs. `deploy-systematic-integrations`). Managed installs never silently overwrite an untracked directory — an interactive TTY prompts per conflict, a non-TTY (CI) hard-errors, and `--force` skips the prompt.
+
+**The author loop this CLI is built around:** `maia link` → edit in place (the symlink means edits are live) → test in your agent → `maia unlink` → `git push` — no browser, no publish step, no auth, no network required for the loop itself.
+
+### 5.1 What's *not* in the CLI yet: `maia eval`
+
+Notably, **there is currently no `maia eval` subcommand** in the CLI as shipped. The planning documents (§6 below) describe a `maia eval` command family as a near-term goal — `maia eval init`, `maia eval suggest`, `maia eval local`, `maia eval run --ref <branch> [--watch|--ci]`, `maia eval results` — but these are proposals, not yet implemented. Today, the only way to run an eval from a terminal against a local skill folder is `man-evals run` (the standalone `man.evals` CLI), which is a different, existing binary from a different, existing package — the plan is for a future `maia eval local` to essentially be a thin wrapper calling into `man.evals` directly.
+
+## 6. The full roadmap, in detail
+
+Two internal planning documents describe how the two systems above are meant to converge: `integrations-browser/docs/rfc-man-evals.md` (a draft RFC, explicitly attributed in its own text to "Dylan's sections" — worth confirming directly if that's you, since it would mean first-hand authorship context is available for the report) and `docs/evals-roadmap.md` (a broader, later-revised roadmap), with `docs/evals-context-brief.md` as a self-contained briefing document written to hand to an external LLM for planning help.
+
+### 6.1 The governance problem that motivates all of this
+
+Feedback from the team that approves skills into the marketplace surfaced real, concrete failures in the *current* system, not hypothetical ones:
+
+- **A nonsense prompt paired with a nonsense rubric scored 90%.** A passing eval can be actively meaningless — worse than no eval at all, because it manufactures false confidence in a reviewer.
+- **Nothing grades the eval itself.** A low-effort or gameable `eval.yaml` reaches human reviewers with no automated check on its own quality.
+- **No guardrails exist on what gets committed as an eval.**
+- **No workflow requires an eval when a skill is submitted**, and codeowners will not hand-write them without one.
+
+The root causes, as diagnosed in `evals-context-brief.md`: the two-stage judge derives its own grading checklist *from* the author's rubric, so a garbage rubric produces a garbage-but-self-consistent checklist that is trivially easy to pass; the judge sees the pass threshold and returns its own pass/fail opinion (inviting anchoring); score normalization has a floor (an answer can never score as badly as it deserves); and the read-only sandbox structurally rewards a fluent, plausible-*sounding* answer, since there is no ground truth available to contradict it.
+
+### 6.2 The investigated-and-rejected path: full real execution via `maia-platform` today
+
+Before settling on the current plan, a real alternative was seriously investigated: running evals inside `maia-platform`, Man Group's existing FastAPI+Celery+K8s agent-sandbox platform, via its published `maia-sdk` client. The investigation's verified findings (as of July 2026) are documented in detail because they explain *why* the roadmap looks the way it does:
+
+- The Claude Code harness ("cc-harness") **is** reachable via `maia-sdk` today by passing `harness_type="claude-code"` — the SDK's type hints only list `maia-chat`/`maia-code`, but the server itself accepts the third value; the SDK performs no runtime validation.
+- The alternative harness, **`maia-code`, must never be used for skill evals** — it is a separate OpenAI-style agent loop with its own unrelated tool registry and has **zero `SKILL.md` support**. Running a "skill eval" on it would silently grade the bare model, not the skill.
+- Sandboxes are one K8s pod **per conversation** for code harnesses (not shared across a user's session, unlike `maia-chat`).
+- The platform's tool-call guard is **an LLM safety classifier reviewing individual calls, not a deterministic write-block** — a "safe"-looking call (e.g. a Slack post) is auto-approved; an "unsafe" one **pauses the run awaiting a human approval response**, which is fatal to a headless/automated eval run unless a watcher is built to auto-reject on the run's behalf.
+- Skills only enter the platform's install catalogue **after approval** — but evals must run **before** approval — so catalogue-based skill install is structurally unusable for exactly the runs that matter most; skill content has to be delivered another way (a signed archive from the Skill Manager, unpacked inside the pod by a setup script).
+
+**Decision:** `maia-platform`/`maia-sdk` was judged **not mature enough to build on yet** (gaps in headless service-account auth on user-facing routes, installing unpublished/draft skills into a pod, and general operational readiness). The real-execution ("platform-live") tier is **shelved with a revisit note, not deleted** — its design is fully kept for when the platform matures — and the immediate plan pivots to local execution instead, which is exactly what `claude_agent_sdk` (and therefore `man.evals`) already does.
+
+### 6.3 The execution tiers, reconciled
+
+Two planning documents describe slightly different numbers of tiers because they were written at different points in the discussion; reconciled, the full picture is **three** execution modes, of which only **two are ever meant to be *scored***:
+
+| Tier | Tool access | Scored? | Status |
+|---|---|---|---|
+| **Hermetic** | Read-only (`Read`/`Grep`/`Glob`/`Skill`) | Yes — the default, cheap, fast-iteration tier | **Shipped**, as `man.evals`'s read-only quality mode |
+| **Full-tools, read-only-operations** (an attended local mode) | Full tool surface, but a guard permits only real reads/GETs (with the user's own ambient credentials) and blocks all mutations | **Explicitly never scored** | Design-only; considered a possible unscored debug aid, not a product feature |
+| **Platform-live** | Full tool surface, real execution, in an isolated pod, under a dedicated read-only eval service identity | Yes — the eventual authoritative, "does it actually work" tier | Designed in detail, **not built** |
+
+The **consistency principle** stated explicitly in both documents is the reason the middle tier is excluded from scoring: *an eval score is a measurement, and a measurement's meaning comes from its instrument.* Every *scored* run of a given tier must share the same tool surface, the same identity, the same mutation policy, and the same environment, regardless of who triggered it or from where — otherwise "it passed on my machine" (a human interactively approving dangerous calls, inflating the score in a way a CI run with mutations denied could never reproduce) creeps in as a structural flaw. `man.evals`'s own tool-enabled mode is, by this framework, a **third, currently-unscored variant in practice** — it exists and works, but neither planning document currently assigns it a place as an officially scored tier; it most closely resembles the "full-tools" mode, minus the read-vs-write distinction (it uses auto-mode's classifier rather than a hard read-only-only guard).
+
+### 6.4 Extracting `man.evals` (build order, per the RFC)
+
+1. **Extraction** — pull `config.py`, `constants.py`, `quality_prompts.py`, the judge client, the invocation/quality runner cores, and the payload models into `man.evals`, import-clean of `lib.db`/`lib.mirror`/`lib.models`. A test used to grep the package for those forbidden imports to enforce the boundary mechanically; it has since been **removed**, so the boundary is now convention plus review, not tooling.
+2. **Server refactor** to import `man.evals` and delete its own copy; publish the package to Artifactory.
+3. **Materialize-by-any-ref** — generalize the server's Forgejo materialization from "draft branch / main" to *any* ref (a specific branch, PR head, or commit sha), and key stored results by commit rather than only by skill+user. This is the prerequisite for CI to ask "evaluate exactly this PR."
+4. **A CI workflow** on a pilot marketplace repo: `maia validate --changed --ci` (a hard, deterministic gate) plus `maia eval run --ref --ci` (informational only, not yet blocking).
+5. **Harden the gate** later — only once the judge redesign (§6.6) has earned enough trust to block merges on a margin band, not a hard cutoff.
+
+### 6.5 Two CI execution models, and the recommendation
+
+- **Model A — server-side "eval by ref" (recommended first).** CI simply calls the existing Skill Manager's eval endpoint against the PR's ref; the server does the materialization and holds the identity already. CI needs nothing but a token. This is why "materialize by any ref" (step 3 above) is the actual unlock — auth is otherwise a solved problem.
+- **Model B — CI-native execution (later).** CI installs `man.evals` itself and runs it in-runner, requiring a dedicated eval service account (Keycloak client-credentials) and, eventually, Docker for a genuinely isolated full-tools tier. Only worth building once the server becomes a bottleneck or the full-tools tier is needed inside CI specifically.
+
+Gate policy either way: **hard-fail only deterministic checks first** (schema validity, `eval.yaml` present, minimum test counts); post eval *scores* as an **informational** status initially; only harden to a merge-blocking gate later, with a margin band (e.g. only block if a score falls more than 0.1 below threshold) specifically to avoid a flaky-CI backlash from a score that wobbles a few points between runs.
+
+### 6.6 The trust work — making a passing score actually mean something
+
+Directly addressing the governance feedback in §6.1, independent of *where* code runs:
+
+1. **Discrimination / control-fail test.** On every quality run, *also* grade a deliberately wrong or empty answer against the exact same rubric. If that also passes, the rubric doesn't discriminate between a right and a wrong answer, and the eval is flagged as untrustworthy. This is cheap and directly catches the "nonsense scored 90%" failure mode; it's called out as worth shipping early, even inside the current read-only tier.
+2. **Judge redesign (v2).** The judge should return **per-criterion verdicts with cited evidence** (`met` / `partially_met` / `not_met` / `not_applicable`) *before* any holistic score; be **threshold-blind** (never told the pass cutoff, and never returning its own pass/fail opinion — the *runner* computes pass/fail, not the judge); always have a **standing criterion** injected ("no fabricated execution"); and have **no score floor** (today's normalization means even a maximally wrong answer can't score below 10%). The roadmap is explicit that any *new* code for a real-execution judge (the platform-live tier) must be built v2-shaped **from day one** — shipping a flashy real-execution feature that still carries the exact scoring defects governance already flagged would be "the nonsense-scores-90% bug, now with real pods."
+3. **Eval-health meta score.** A score computed *over the eval itself* (skill files + `eval.yaml` together) at authoring/PR time — grounding (does the rubric reference things that actually exist in the skill?), discrimination (does it fail the control-fail test above?), realism (is the prompt a plausible user request, not just a restatement of the rubric?), leakage (does the prompt or rubric quote its own answer?), coverage. Surfaced as a badge plus inline warnings, specifically so a bad eval never even reaches a human reviewer.
+4. **Adoption model: AI drafts, human curates.** Auto-draft `eval.yaml` from a skill's own description/instructions (the app already has a "generate test cases" endpoint this would extend) and make that the *default* authoring path, with the same approach used to backfill existing skills that have no evals yet — the stated reasoning being that codeowners will not hand-write evals from scratch, so the realistic adoption path has to start from a machine-generated draft.
+
+### 6.7 The platform-live tier's design, in detail (for when it's built)
+
+Even though not yet implemented, the design is fully specified, and worth knowing because it explains several odd-looking constraints elsewhere:
+
+- **One endpoint, three thin clients.** The UI's "Run live" toggle, a `maia eval run --live` CLI flag, and a CI workflow step are all meant to be thin callers of a single new Skill Manager endpoint (`POST /api/skills/{name}/evals/live-runs`) — consistency of *identity*, not just of code, is the point: every live run executes under one dedicated eval service identity with read-only grants, in one locked-down sandbox config, regardless of who triggered it.
+- **Skill delivery is a signed archive, not the platform's install mechanism** — because catalogue-based install requires prior approval, which evals must run *before*. The server materializes the requested ref (excluding the reserved eval files, as always), tars it, mints a one-time short-TTL signed URL, and a baked-in pod setup script fetches and unpacks it.
+- **One agent per run, one conversation per test, non-negotiable.** A conversation is one growing, shared context — a second test sharing it would see the first test's Q&A and tool results, contaminating the result. One pod per test is the accepted cost, run a few in parallel.
+- **A watcher auto-rejects every approval-required call** (`ApprovalRequestEntry`) with a fixed reason ("eval sandbox: mutations denied") — the denied attempt still lands in the transcript as gradeable evidence, so a mutating skill is graded on how far it correctly got before being denied, not simply failed outright.
+- **Defense in depth, ranked by how much weight each layer actually carries:** (1) a genuinely **read-only eval identity** — the strongest layer, since even a misclassified "safe" write from the LLM guard still hits a real `403` at the actual backend; (2) an **egress allowlist** — the pod physically cannot reach a host that isn't listed; (3) **no writable mounts** — in-pod file writes are harmless by construction, since the pod itself is disposable; (4) the **LLM guard** is explicitly demoted to a tripwire/evidence-generator, *not* a security boundary, precisely because its own misclassifications (obfuscated bash, a GET with real side effects) are expected and must not be load-bearing.
+
+## 7. Open questions the planning documents leave explicitly unresolved
+
+Worth listing verbatim-in-spirit, since these are genuinely still open at the time of writing and would be reasonable things to ask about if this work continues past the internship:
+
+- Does `maia-platform` accept a client-credentials service account as a `Caller` for agent/conversation/sandbox-config CRUD? (Its documented service-to-service auth is for harness→gateway calls, not necessarily this direction.)
+- Who provisions and owns the dedicated **eval service identity**, and exactly which read-only grants does it get (Slack, the internal graph proxy, Codex, PAM, ...)?
+- Who provisions a CI service LLM credential for hermetic CI runs (Model B), and whose budget do those tokens land on?
+- Is Docker even available, or rootless, on Man Group's headnodes at all? (Blocks any idea of local Docker use outright until spiked.)
+- Package location: does `man.evals` stay inside the `maia-evals` repo, or eventually get its own split-off repo once its interface stabilizes fully? (The roadmap treats this as "cheap once the boundary exists," i.e., low priority relative to everything above.)
+- What is genuinely the minimal set of `maia-platform` capabilities needed before the live tier becomes viable — draft-skill install into a pod, a deterministic deny-writes guard *mode* (distinct from the advisory LLM guard), and the read-only eval service identity are the three named as blocking.
+
+## 8. Why this matters for the report
+
+The most transferable lesson in this half of the story is less "how to build an eval engine" and more **how a growing product incrementally negotiates where a piece of logic should live**, under real constraints: three different call sites that need the same guarantees (browser, terminal, CI), a governance process that found real, embarrassing failure modes in what already shipped, and an ambitious "real execution" idea that was investigated seriously, found genuinely promising, and *still* deliberately shelved because the supporting platform wasn't ready — with its design kept rather than thrown away, precisely so the eventual work doesn't have to be redone from scratch. The RFC document explicitly attributes its scope to a named engineer's own sections; if that's you, the report can and should draw directly on that first-hand decision history rather than reconstructing it secondhand from the document alone.

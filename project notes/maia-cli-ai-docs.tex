@@ -1,0 +1,353 @@
+# Maia Link CLI
+
+---
+title: maia link
+description: Link a local skill folder into a coding agent so it loads your live copy
+weight: 70
+---
+
+`maia link` creates a link from your local skill folder into the skills folder a coding agent reads (`~/.claude/skills/` or `~/.agents/skills/`).
+The agent then loads the skill straight from your folder, so any edits you make show up right away without re-installing.
+
+This is the main step when you're building a skill: link your folder, use the skill in Claude Code, Codex, or OpenCode, edit it, and repeat.
+When you're done, remove the link with [`maia unlink`](../unlink/), and check on it any time with [`maia status`](../status/).
+
+## Usage
+
+```bash
+maia link [-h] [--harness HARNESS ...] [path]
+```
+
+If you don't give a `path`, it uses the current folder.
+
+## Arguments
+
+| Argument | Default | Notes |
+| --- | --- | --- |
+| `path` | current folder | Path to the local skill folder to link. The skill is named after this folder (see [Name](#name)). |
+
+## Options
+
+| Flag | Default | Notes |
+| --- | --- | --- |
+| `--harness HARNESS` | every harness | One or more coding agents to link into, space-separated. Omit it to link into all of them. |
+| `-h`, `--help` | none | Print help and exit. |
+
+### `--harness`
+
+`--harness` selects which coding agent(s) the link is created in.
+It is variadic, so you can pass several at once, space-separated.
+Omit it and the link is created in every harness at once.
+
+| Value | Skills folder |
+| --- | --- |
+| `claude` | `~/.claude/skills/` |
+| `codex` | `~/.agents/skills/` |
+| `opencode` | `~/.claude/skills/` (OpenCode reads the same layout as Claude Code) |
+
+Linking is all-or-nothing across the harnesses you name.
+If the link can't be created in one of them, it isn't created in any of them (see [When the Name Is Already Taken](#when-the-name-is-already-taken)).
+
+## Examples
+
+```bash
+# Link the skill in the current folder into Claude Code only
+cd skills/loki-query
+maia link --harness claude
+
+# Link the current folder into every coding agent (Claude Code / Codex / OpenCode)
+maia link
+
+# Link into two specific harnesses at once
+maia link --harness claude codex
+
+# Link a skill at a specific path rather than the current folder
+maia link ~/skills/loki-query
+
+# Link a skill at a path into Codex only
+maia link ~/skills/loki-query --harness codex
+```
+
+## Name
+
+A skill is named after its folder.
+If the `name:` in the folder's `SKILL.md` doesn't match the folder name, the command stops and exits.
+This is the same rule [`maia validate`](../validate/) checks.
+
+## When the Name Is Already Taken
+
+Before linking, the command checks whether a skill of the same name is already there in each harness you're linking into.
+There are three cases:
+
+1. **Nothing is there** - no skill of that name is installed, so the link is created.
+
+2. **A managed skill is there** - a skill installed from a marketplace like `ai.integrations`.
+   The command stops and points you at `maia uninstall`.
+   Uninstall it (or rename your skill folder), then link.
+   When you later want the marketplace skill back, re-install it with [`maia install`](../install/).
+
+3. **Anything else is there** - another link of the same name, or an untracked file/folder sitting in the skills directory.
+   The command leaves it untouched and tells you to [`maia unlink`](../unlink/) it (if it's a link) or remove it by hand.
+
+## Where Links Are Recorded
+
+Each link is recorded in `~/.maia/maia.json`, so [`maia unlink`](../unlink/) and [`maia status`](../status/) know what you've linked and can restore a skill your link was hiding.
+The manifest root defaults to `~/.maia` and can be overridden with the `MAIA_HOME` env var.
+
+
+# Maia Unlink 
+---
+title: maia unlink
+description: Remove a link you made, and restore any installed skill it was hiding
+weight: 80
+---
+
+`maia unlink` removes a link you made with [`maia link`](../link/) once you're done developing a skill locally.
+
+Not sure what you've got linked?
+Start with [`maia status`](../status/), which lists every link you have - its name, the harness it lives in, and whether it's still working.
+Pick the one you're finished with and remove it by name:
+
+```bash
+maia unlink <skill-name>
+```
+
+`maia unlink` only removes links made by `maia link`.
+It never deletes an installed skill or a folder it doesn't know about.
+
+You can remove a link by name, by its source path, or remove all of them with `--all`.
+A broken link can still be removed by name.
+If you don't pass `--harness`, the link is removed from every harness it's in.
+
+## Usage
+
+```bash
+maia unlink [-h] [--harness HARNESS ...] [--all] [name_or_path]
+```
+
+## Arguments
+
+| Argument | Notes |
+| --- | --- |
+| `name_or_path` | The skill to unlink. Accepts either the skill name (its folder name) or the source path you linked from. Omit it only when using `--all`. |
+
+## Options
+
+| Flag | Default | Notes |
+| --- | --- | --- |
+| `--harness HARNESS ...` | every harness the link is in | One or more coding agents to remove the link from, space-separated. Omit it to remove the link from every harness it lives in. |
+| `--all` | off | Remove every link you have, across every harness. Ignores `name_or_path`. |
+| `-h`, `--help` | none | Print help and exit. |
+
+### `--harness`
+
+`--harness` narrows the removal to specific coding agent(s).
+It is variadic, so you can pass several at once, space-separated.
+Omit it and the link is removed from every harness it currently lives in.
+
+| Value | Skills folder |
+| --- | --- |
+| `claude` | `~/.claude/skills/` |
+| `codex` | `~/.agents/skills/` |
+| `opencode` | `~/.claude/skills/` (OpenCode reads the same layout as Claude Code) |
+
+## Examples
+
+```bash
+# Unlink by name from every harness it's linked in
+maia unlink loki-query
+
+# Unlink by source path instead of name
+maia unlink ~/skills/loki-query
+
+# Unlink from a specific harness only, leaving other harnesses linked
+maia unlink loki-query --harness claude
+
+# Remove every link you have
+maia unlink --all
+```
+
+## What It Does Not Do
+
+- It does not delete installed skills or any folder it didn't create.
+- It does not touch untracked files or folders that happen to share the skill's name - only links `maia link` recorded.
+
+
+# Maia Status
+---
+title: maia status
+description: See your links, whether they're working, and which git branch is live
+weight: 90
+---
+
+`maia status` shows the state of your links: whether each one is working and which version of the skill the agent is actually loading.
+With no argument, it shows every link you have.
+Pass a skill name to look up one link, or a path to check the folder at that location.
+
+It's the companion to [`maia link`](../link/) and [`maia unlink`](../unlink/): link a folder, check on it here, and unlink it when you're done.
+
+## Usage
+
+```bash
+maia status [-h] [--json] [name_or_path]
+```
+
+## Arguments
+
+| Argument | Default | Notes |
+| --- | --- | --- |
+| `name_or_path` | all links | A skill name to show one link, or a path to check the folder at that location. Omit it to show every link you have. |
+
+## Options
+
+| Flag | Default | Notes |
+| --- | --- | --- |
+| `--json` | off | Print machine-readable JSON instead of the table. |
+| `-h`, `--help` | none | Print help and exit. |
+
+## Examples
+
+```bash
+# Show every link you have
+maia status
+
+# Look up one link by skill name
+maia status loki-query
+
+# Check the folder at a specific path
+maia status skills/loki-query
+
+# Emit JSON for scripting
+maia status --json
+```
+
+## Output
+
+The command prints a table with these columns:
+
+| Column | Meaning |
+| --- | --- |
+| `NAME` | The skill's name (its folder name) |
+| `HARNESS` | Which harness the link lives in (Claude Code, Codex, OpenCode) |
+| `STATE` | Whether the link is working - one of the states below |
+| `BRANCH` | The current git branch of the source folder |
+| `SOURCE` | Path to the local folder the link points at |
+
+`BRANCH` is worth watching: it shows when a `git checkout` has swapped the skill without you noticing, so you can always tell which version the agent is loading.
+
+## States
+
+A broken link changes the reported `STATE`, never the exit code.
+So `maia status` exits `0` whether or not any link is broken - read the `STATE` column (or the JSON) to find problems, rather than the exit code.
+
+| State | Meaning | What to do |
+| --- | --- | --- |
+| `ok` | The link points to the recorded source and its `SKILL.md` exists | Nothing - the agent is loading your folder |
+| `dangling` | The link is correct but the source folder or its `SKILL.md` is gone | Restore the folder, or run [`maia unlink`](../unlink/) to clear it|
+| `missing` | The link itself was deleted | Re-create it with [`maia link`](../link/) |
+| `replaced` | A real folder or file is now in its place | Remove what's there, then re-link, or rename your skill |
+| `foreign` | The link points somewhere other than the recorded source | Re-link from the intended folder, or `maia unlink` it |
+
+## Where It Reads From
+
+`maia status` reads your links from `~/.maia/maia.json` (override the root with `MAIA_HOME`) and then checks each one against what's actually on disk to work out its `STATE` and `BRANCH`.
+
+
+
+
+# Maia Validate
+
+---
+title: maia validate
+description: Check that a skill is valid before you push it
+weight: 60
+---
+
+`maia validate` checks that all the contents of a skill are valid.
+It checks the `SKILL.md` file and any attachments.
+
+Run it before you push a skill or open a PR: it enforces the same contract MAIA Knowledge expects, so a skill that validates locally won't be rejected for a naming or frontmatter problem later.
+It's also the same name-match rule [`maia link`](../link/) applies before it links a folder.
+
+By default it checks the skill in the current folder.
+You can also point it at a specific folder, or pass the name of a skill you've [linked](../link/) and it will resolve that to the linked source folder and check it there.
+Add `--all` to check every `SKILL.md` under a folder, including skills inside plugins.
+
+## Usage
+
+```bash
+maia validate [-h] [--all] [--json] [path]
+```
+
+If you don't give a `path`, it uses the current folder.
+
+## Arguments
+
+| Argument | Default | Notes |
+| --- | --- | --- |
+| `path` | current folder | The skill folder to check, or (with `--all`) a folder to search for skills under. You can also give the name of a [linked](../link/) skill, and it checks that link's source folder. |
+
+## Options
+
+| Flag | Default | Notes |
+| --- | --- | --- |
+| `--all` | off | Check every `SKILL.md` found under `path`, not just the one folder. |
+| `--json` | off | Print results as JSON instead of human-readable text. |
+| `-h`, `--help` | none | Print help and exit. |
+
+## Examples
+
+```bash
+# Check the skill in the current folder
+cd skills/loki-query
+maia validate
+
+# Check a skill at a specific path
+maia validate skills/loki-query
+
+# Check a skill you've linked, by its name (resolves to the linked source folder)
+maia validate loki-query
+
+# Check every skill in a folder (including skills inside plugins)
+maia validate --all managed/
+
+# Output as JSON (for CI / scripts)
+maia validate --json
+```
+
+## What It Checks
+
+There are two kinds of result.
+Errors stop the skill from being accepted and exits.
+Warnings are shown but don't stop anything.
+
+### Errors
+
+| Rule | Requirement |
+| --- | --- |
+| `name` length | 64 characters or fewer |
+| `name` format | Matches `^[a-z0-9-]+$` (lowercase letters, digits, hyphens) |
+| `name` content | Must not contain `anthropic` or `claude` |
+| Frontmatter | `SKILL.md` must have YAML frontmatter with both `name:` and `description:` |
+| `description` | Non-empty, 1024 characters or fewer, no XML tags (`<...>`) |
+| YAML | Frontmatter must be valid YAML that parses to a mapping |
+| Encoding | `SKILL.md` must be valid UTF-8 |
+| Name match | Frontmatter `name:` must equal the folder name |
+
+The skill is named after its folder, so a `name:` that doesn't match the folder name is rejected.
+
+### Warnings
+
+| Warning | What it flags |
+| --- | --- |
+| `oversized-file` | Files larger than 5 MB |
+| Possible secret | Likely credentials in text files: AWS keys, private-key blocks, GitHub PATs and fine-grained tokens, Slack tokens, and hard-coded `password` / `secret` / `api_key = "..."` assignments |
+
+Binary files (identified by their file extension) are never scanned for secrets.
+`node_modules`, `__pycache__`, and hidden folders are skipped.
+
+
+
+
+
+

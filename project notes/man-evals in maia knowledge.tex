@@ -1,0 +1,89 @@
+# How `man.evals` Fits Into the Broader Maia Knowledge Platform
+
+This note complements `man-evals-internship-report.md`.
+Where that note explains what `man.evals` (the `maia-evals` repo) *is* in isolation, this one explains where it sits inside the larger product it serves — "Maia Knowledge", also known internally as the **Skill Manager** (repo: `integrations-browser`) — and how the two are planned to come together.
+
+## The bigger picture: four repos, one product
+
+Man Group's skills-and-evals ecosystem is made of four repos that only make sense together:
+
+| Repo | Role |
+|---|---|
+| `man.ai` | Foundation SDK: talks to the internal LLM gateway (ManGPT), used for chat, the AI judge, and AI-generated suggestions. |
+| `integrations-browser` ("Skill Manager" / Maia Knowledge) | The product: a FastAPI + React web app where people author skills, test them, and commit changes back to git. This is what end users actually open in a browser. |
+| `maia-evals` (`man.evals`) | The standalone evaluation engine this report is about. |
+| `evals-gui-demo` | Static prototypes exploring what a future results-viewing UI could look like. |
+
+Maia Knowledge is the *product*.
+`man.evals` is the *engine* that one part of that product — the evals feature — is being rebuilt on top of.
+
+## Where `man.evals` came from
+
+Evaluation was not always a separate package.
+It started as ordinary application code inside Maia Knowledge, at `integrations-browser/lib/evals/`, tightly coupled to that app's FastAPI routes and Postgres database.
+That is still true today: Maia Knowledge currently runs its **own embedded copy** of the eval logic (`lib/evals/`), not the extracted `man.evals` package — the two are separate codebases that are deliberately kept output-compatible with each other while the migration is in progress.
+
+The extraction into `maia-evals` happened for one concrete reason: the eval engine needed to run from **three different places**, not just from inside a running server:
+
+1. **The Skill Manager server itself** (today's only caller) — a user clicks "Run" in the browser.
+2. **A local command-line tool** (`maia eval` / `maia-evals`) — so a skill author can test a skill from their own terminal while editing it, without needing a running server.
+3. **CI** — so a pull request that changes a skill or its `eval.yaml` can be checked automatically before a human reviews it.
+
+A FastAPI app with a Postgres database is a heavy thing to install just to run a test suite from a terminal or a CI job.
+So the actual test-running logic (parsing `eval.yaml`, spinning up the agent, talking to the LLM judge, producing a score) was pulled out into `man.evals`: a small, dependency-light library with none of the server's web-framework or database baggage.
+Everything that is genuinely server-specific — reading skill files out of Forgejo (the git host), saving results into Postgres, the in-memory "which runs are in flight" tracker, and the HTTP endpoints themselves — stayed behind in `integrations-browser`.
+
+## Current state: two implementations, one contract
+
+As of today, both codebases exist side by side:
+
+- `integrations-browser/lib/evals/` — the original, embedded version. This is what actually runs when someone uses the Maia Knowledge web app right now.
+- `maia-evals` (`man.evals`) — the extracted, standalone version. Usable today as a CLI and a Python library, but not yet wired into the web app.
+
+They are not accidental duplicates: the two are deliberately kept **byte-compatible** on their output — the JSON shape of a result from one matches the JSON shape from the other — precisely so that swapping the server over to import `man.evals` later, instead of using its own copy, is a safe, incremental change rather than a rewrite. Until that swap happens, a schema change has to be made carefully in both places.
+
+## The plan for closing that gap
+
+Two internal planning documents lay out how the rest of this is meant to happen (`integrations-browser/docs/rfc-man-evals.md` and `docs/evals-roadmap.md`). Put together, the plan has three moving parts:
+
+### 1. Finish the extraction, then swap the server over
+
+Once `man.evals`'s interface is considered stable, `integrations-browser` stops using its own `lib/evals/` copy and imports `man.evals` instead, deleting the duplicate code.
+At that point there is exactly one eval engine, and the server becomes just one of its callers.
+
+### 2. Give skill authors a CLI, not just a browser button
+
+A `maia eval` command (part of the broader `maia` CLI that already exists for browsing and installing skills) lets a developer run a skill's evals from their own terminal, against their own working copy, using their own login session — no need to open the web app or push anything first. This is the "fast iteration loop": write a skill, run its evals locally, adjust, repeat, before ever touching git.
+
+### 3. Run evals automatically on pull requests
+
+Once a marketplace repo's skills are proposed for a change via PR, CI should be able to run that skill's evals automatically and post the result on the PR, the same way a normal test suite gates a normal software change.
+Two ways to implement this were weighed:
+
+- **Server-side, "eval by ref" (the recommended first step):** CI simply calls the *existing* Skill Manager server and asks it to evaluate a specific git ref (branch/commit), reusing the server's already-working authentication and materialization logic. Almost no new infrastructure.
+- **CI-native execution (a later option):** CI installs `man.evals` itself and runs the evaluation inside the CI job. More setup (a dedicated service credential, a runner image), but removes load from the server and is the only way to eventually run the more expensive "full tool access" evaluation tier in CI.
+
+The recommendation is to start with the first option because it reuses infrastructure that already works, and only build the second if the server becomes a bottleneck.
+
+## A second axis of change: how "real" an evaluation is
+
+Independent of *where* the code runs, there is a second, more fundamental evolution planned: *what the agent is allowed to do* during an evaluation.
+
+Today (and in the near-term local/CI plans above), every evaluation is **hermetic**: the agent under test can only read files, never actually run a command, call an API, or make a change.
+This is safe and fast, but it has a real limitation — it can only judge whether a skill's *described* plan sounds right, not whether the skill *actually works*. A skill referencing a since-renamed API parameter could pass every hermetic test and still be broken in practice.
+
+The roadmap's answer is a second, higher-fidelity tier, called **platform-live**: the skill is executed for real, inside an isolated sandbox pod on Man Group's internal agent platform (`maia-platform`), under a locked-down identity that can read real systems but is denied any real write or mutation. The judge then grades the actual transcript of what happened — the real API calls, in the real order, with the real parameters — rather than grading a written description of intent.
+
+The two tiers are meant to coexist permanently, not replace one another:
+
+| Tier | Answers | Speed | Where it runs |
+|---|---|---|---|
+| Hermetic (`man.evals`, this repo) | "Does the skill describe the right procedure?" | Seconds | Server, developer's terminal, or CI — identical either way |
+| Platform-live (future) | "Does the skill actually work?" | Minutes (one sandbox pod per test) | A dedicated Skill Manager endpoint, called by the UI, CLI, and CI as thin clients |
+
+`man.evals` is explicitly the hermetic tier's implementation. The platform-live tier is a separate, larger undertaking (it depends on another Man Group platform maturing first) and is documented but not yet built.
+
+## Why this matters for the report
+
+The interesting engineering story here is not just "we wrote an eval library" — it is the sequence of decisions about *where logic should live* as a single feature (evals) grew from "a button in one web app" into "a capability that needs to run consistently in a browser, a terminal, and a CI pipeline, at two different levels of realism, without ever letting any of those callers disagree about what a passing score means."
+`man.evals` is the concrete first step of that story: proof that the engine can be separated from the app that first hosted it, cleanly enough that the app itself can eventually be rewritten to depend on it rather than own it.

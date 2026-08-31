@@ -1,0 +1,87 @@
+# maia-evals (man.evals): Internship Report Notes
+
+## What it is
+
+`man.evals` is a Python library and CLI, built at Man Group, for evaluating Claude Code "skills" (reusable, version-controlled agent capabilities defined by a `SKILL.md` file).
+Given a skill folder, it runs a configurable evaluation suite against that skill and produces a structured, JSON-serializable report scoring how well the skill performs.
+It exists so that a skill author can run tests locally while editing a skill, in the same way a software engineer runs unit tests while editing code.
+
+The repository is one of four related repos that make up Man Group's "MAIA" skills-and-evals ecosystem (`man.ai`, `maia-evals`, `integrations-browser`, `evals-gui-demo`).
+`man.evals` began as an extraction of evaluation logic embedded inside `integrations-browser` (a web app for authoring and testing skills), pulled out into its own standalone, dependency-light package so it can be used directly from the command line or imported into other tools without needing a server or database.
+
+## The problem it solves
+
+Claude Code skills are prompt-and-instruction bundles that extend what an AI coding agent can do (for example, a skill that knows how to deploy a service, debug a Kubernetes cluster, or fetch a permalink for a piece of code).
+Because skills are natural-language artifacts rather than compiled code, there is no obvious way to "test" them the way you would test a function.
+Two failure modes matter in practice:
+
+1. **The skill never fires.** The agent does not recognize that a given user prompt should trigger the skill, or it fires on prompts it should not.
+2. **The skill fires but performs badly.** The agent uses the skill, but the response does not actually satisfy what a competent human would expect (wrong command, missing a safety step, incomplete answer).
+
+`man.evals` addresses both failure modes as two distinct, independently-configurable "dimensions" of evaluation, plus a third mode that graduates the second dimension from a dry-run into a live one.
+
+## The three evaluation dimensions
+
+Each skill defines its tests in a version-controlled `eval.yaml` file that sits alongside its `SKILL.md`.
+
+### 1. Invocation
+
+Checks whether the `Skill` tool actually fires for the right prompts, and stays silent for the wrong ones.
+The author supplies a list of `positive` prompts (should trigger the skill) and `negative` prompts (should not).
+Each prompt is sent as a short, read-only agent run; the test passes only if the tool-call behavior matches the expected polarity.
+This is a binary, mechanical check with no LLM judgment involved.
+
+### 2. Quality (read-only)
+
+Checks whether the skill's response is actually good, using an LLM as a grader — a technique commonly called "LLM-as-judge" or, more specifically, G-Eval.
+The author writes a `prompt` and a natural-language `rubric` per test case (e.g. "Names the exact deploy command and the approval step before it").
+The evaluation runs in two stages:
+
+1. The rubric is rewritten into a checklist of concrete, checkable grading criteria (this step is itself an LLM call, and can be disabled with `rewrite_rubric: false` to grade the rubric exactly as written).
+2. A separate LLM judge scores the agent's actual response holistically against that checklist, on a 1–10 scale, normalized to a 0–1 score.
+
+The agent under test only gets read-only tools (`Read`, `Grep`, `Glob`, `Skill`) during this run, so it can only reason about what it *would* do, not actually do it.
+A configurable `pass_threshold` (default 0.7) determines pass/fail from the normalized score.
+
+### 3. Tool-enabled quality (a mode of dimension 2, not a separate dimension)
+
+The same prompts and rubrics from the quality block are re-run, but this time the agent is given the *full* Claude Code tool surface (Bash, file writes, network calls) and actually executes the task for real, inside a permission mode where every tool call is reviewed by an LLM-based classifier before it is allowed to run.
+The judge then scores what the agent *actually did*, not just what it said it would do.
+This is opt-in via `enable_tools=True` and prints a loud, unconditional warning banner before running, because there is no OS-level sandbox: a "legitimate-looking" tool call to a real production system can be allowed by the classifier.
+The library explicitly restricts safe example usage of this mode to an inert bundled demo skill, and warns against pointing it at anything that has real-world side effects (e.g. a demo Slack-posting skill).
+
+## How a skill is actually run
+
+Rather than shelling out to the `claude` CLI directly, the library drives the agent through `claude_agent_sdk.query()`, which spawns the SDK's own bundled CLI as a subprocess.
+Before running, the skill folder is copied into a temporary sandbox directory, deliberately excluding the `eval.yaml`/`eval.yml` files, and a set of permission hooks actively deny any tool call that would try to read those files.
+This "answer-key isolation" stops the agent from ever seeing its own grading rubric during a real evaluation run, similar in spirit to keeping an exam answer key away from the student sitting the exam.
+
+Runs are concurrent (default 10 at a time) with live terminal progress bars, and every run is capped by both a maximum number of agent turns and (for tool-enabled runs) a dollar budget, so a misbehaving or looping agent cannot run indefinitely or rack up unbounded cost.
+
+## Output: the EvalReport
+
+Running an evaluation returns an `EvalReport` object holding one JSON-serializable payload per dimension (invocation, quality/tool-use), plus an overall `pass_rate` between 0 and 1.
+The report can be printed as a human-readable, colorized summary in the terminal, serialized to JSON for storage, or inspected step-by-step per test via a `trace()` method that shows exactly what the agent did during a run.
+The JSON payload shape is deliberately kept byte-compatible with the format the earlier, embedded version of this evaluator (still running inside `integrations-browser`) persists into its own database, so that the two systems can eventually be swapped for one another without a data migration.
+
+## Interfaces
+
+- **Python API**: `run_eval(skill_dir)` / `arun_eval(skill_dir)` (sync and async) are the two public entry points, along with a small set of config classes for building test configuration directly in Python instead of a YAML file.
+- **Command-line tool**: `man-evals run <skill_dir>` runs the same evaluation from a terminal or CI pipeline, with flags for model overrides, thresholds, and JSON output. Its exit code (0/1/2/130) is designed to be consumed directly by CI.
+
+## Engineering practices worth noting for the report
+
+- The test suite (`pytest`) is entirely offline: the agent SDK and the LLM judge are both faked with monkeypatching, so the full suite runs in seconds with no API cost and no network access, and is safe to run in parallel (`pytest -n 4`, matching what CI uses).
+- The package deliberately has zero server, database, or CLI-framework dependencies, keeping it usable as a plain library inside other tools.
+- Several design decisions are treated as load-bearing safety invariants with dedicated tests, for example: never allow a "tool-enabled" evaluation to silently downgrade into a safer-looking but less meaningful read-only run, and always fully drain the agent's response stream so a subprocess is never orphaned.
+- The repository's own `CLAUDE.md` file is itself an example of the kind of deep, decision-level documentation this ecosystem encourages: it does not just describe what the code does, but why specific tricky decisions were made and what would go wrong if they were undone.
+
+## Suggested framing for a university report
+
+This project is a good example of **infrastructure for evaluating AI agent behavior**, sitting at the intersection of:
+
+- **Software testing practice** applied to a fundamentally non-deterministic system (an LLM-driven agent), where "did this pass" is itself sometimes a judgment call made by another LLM.
+- **Safety-by-design engineering**, where the riskiest capability (letting an agent execute real commands) is deliberately made opt-in, loud, cost-bounded, and isolated from its own grading criteria.
+- **API and library design discipline**, where the maintainers are explicit about what counts as public surface area versus internal implementation, and enforce that boundary with tests rather than convention alone.
+
+A concrete narrative thread for a report could be: skills are natural-language capabilities, which makes them powerful but hard to test; `man.evals` closes that gap by treating "does the skill trigger correctly" and "is the skill's answer actually good" as two separate, measurable, automatable questions, and by carefully gating the point where evaluation crosses over from asking an agent what it would do into letting it actually do it.
